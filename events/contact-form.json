@@ -1,0 +1,19 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /contact",
+  "rawPath": "/contact",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json",
+    "origin": "https://example.cloudfront.net"
+  },
+  "requestContext": {
+    "http": {
+      "method": "POST",
+      "path": "/contact",
+      "sourceIp": "127.0.0.1"
+    }
+  },
+  "body": "{\"name\":\"Fabio Rossi\",\"email\":\"fabio@example.com\",\"message\":\"Ciao, vorrei ricevere maggiori dettagli.\",\"website\":\"\"}",
+  "isBase64Encoded": false
+}

@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless contact form web app with S3, CloudFront, API Gateway, Lambda, and SNS.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: contact-webapp
+    Description: Prefix used for resource naming.
+
+  NotificationEmail:
+    Type: String
+    Description: Email address that will receive SNS notifications.
+
+  FrontendIndexDocument:
+    Type: String
+    Default: index.html
+    Description: Static site index document.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: !Ref ProjectName
+
+Resources:
+  ContactTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-notifications'
+      DisplayName: Contact form notifications
+
+  ContactTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ContactTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-${AWS::AccountId}-${AWS::Region}-site'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: !Ref FrontendIndexDocument
+        ErrorDocument: !Ref FrontendIndexDocument
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebsiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  WebsiteOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ProjectName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ContactApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub 'https://${CloudFrontDistribution.DomainName}'
+        AllowHeaders:
+          - content-type
+        AllowMethods:
+          - POST
+          - OPTIONS
+        MaxAge: 86400
+
+  ContactFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-contact-handler'
+      CodeUri: src/contact_handler/
+      Handler: app.lambda_handler
+      Description: Receives contact form submissions and publishes to SNS.
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt ContactTopic.TopicName
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref ContactTopic
+          ALLOWED_ORIGIN: !Sub 'https://${CloudFrontDistribution.DomainName}'
+      Events:
+        SubmitContact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApi
+            Path: /contact
+            Method: POST
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${ProjectName} static frontend distribution'
+        DefaultRootObject: !Ref FrontendIndexDocument
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: WebsiteBucketOrigin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebsiteOriginAccessControl.Id
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: WebsiteBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL for the contact form.
+    Value: !Sub 'https://${ContactApi}.execute-api.${AWS::Region}.amazonaws.com/contact'
+
+  FrontendUrl:
+    Description: CloudFront URL serving the static frontend.
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+
+  FrontendBucketName:
+    Description: S3 bucket that stores the static frontend assets.
+    Value: !Ref WebsiteBucket
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID for cache invalidation.
+    Value: !Ref CloudFrontDistribution
+
+  SnsTopicArn:
+    Description: SNS topic ARN used by Lambda.
+    Value: !Ref ContactTopic

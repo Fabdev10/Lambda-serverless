@@ -1,0 +1,85 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws-region:
+        description: AWS region for deployment
+        required: true
+        default: eu-west-1
+      stack-name:
+        description: CloudFormation stack name
+        required: true
+        default: contact-webapp
+      notification-email:
+        description: Email address subscribed to SNS notifications
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.aws-region }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+      - name: Build application
+        run: sam build --template-file template.yaml
+
+      - name: Deploy stack
+        run: >-
+          sam deploy
+          --template-file .aws-sam/build/template.yaml
+          --stack-name ${{ inputs.stack-name }}
+          --region ${{ inputs.aws-region }}
+          --capabilities CAPABILITY_IAM
+          --resolve-s3
+          --no-confirm-changeset
+          --no-fail-on-empty-changeset
+          --parameter-overrides NotificationEmail=${{ inputs.notification-email }}
+
+      - name: Resolve stack outputs
+        id: outputs
+        run: |
+          API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ inputs.stack-name }}" --region "${{ inputs.aws-region }}" --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+          BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "${{ inputs.stack-name }}" --region "${{ inputs.aws-region }}" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text)
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name "${{ inputs.stack-name }}" --region "${{ inputs.aws-region }}" --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text)
+          echo "api_endpoint=$API_ENDPOINT" >> "$GITHUB_OUTPUT"
+          echo "bucket_name=$BUCKET_NAME" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$DISTRIBUTION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare frontend bundle
+        run: |
+          rm -rf frontend-dist
+          cp -R frontend frontend-dist
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('frontend-dist/config.js')
+          content = path.read_text(encoding='utf-8')
+          content = content.replace('__CONTACT_API_URL__', '${{ steps.outputs.outputs.api_endpoint }}')
+          path.write_text(content, encoding='utf-8')
+          PY
+
+      - name: Upload static frontend
+        run: aws s3 sync frontend-dist "s3://${{ steps.outputs.outputs.bucket_name }}" --delete --region "${{ inputs.aws-region }}"
+
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id "${{ steps.outputs.outputs.distribution_id }}" --paths "/*"

@@ -1,0 +1,230 @@
+:root {
+  color-scheme: light;
+  --bg: #f2efe8;
+  --surface: rgba(255, 255, 255, 0.78);
+  --surface-strong: rgba(255, 255, 255, 0.92);
+  --ink: #18212f;
+  --muted: #5f6572;
+  --line: rgba(24, 33, 47, 0.12);
+  --accent: #c65d3b;
+  --accent-strong: #8f3218;
+  --success: #1d6d43;
+  --error: #b9381b;
+  --shadow: 0 24px 60px rgba(24, 33, 47, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(198, 93, 59, 0.18), transparent 35%),
+    radial-gradient(circle at bottom right, rgba(26, 113, 104, 0.16), transparent 40%),
+    linear-gradient(135deg, #faf6ef 0%, #ebe6de 100%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: linear-gradient(rgba(24, 33, 47, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24, 33, 47, 0.03) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+}
+
+.page-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0;
+  display: grid;
+  grid-template-columns: 1.15fr 0.95fr;
+  gap: 24px;
+}
+
+.hero-panel,
+.form-panel {
+  backdrop-filter: blur(18px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+}
+
+.hero-panel {
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.hero-panel h1,
+.form-panel h2 {
+  margin: 0;
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+}
+
+.hero-panel h1 {
+  font-size: clamp(3rem, 6vw, 5.5rem);
+  max-width: 10ch;
+}
+
+.hero-copy {
+  margin: 24px 0 0;
+  max-width: 54ch;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  font-size: 0.85rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.architecture-list {
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+}
+
+.architecture-list li {
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--surface-strong);
+  border: 1px solid rgba(24, 33, 47, 0.08);
+}
+
+.form-panel {
+  padding: 36px;
+}
+
+.panel-header {
+  margin-bottom: 24px;
+}
+
+.form-panel h2 {
+  font-size: clamp(2rem, 3vw, 2.8rem);
+}
+
+#contact-form {
+  display: grid;
+  gap: 18px;
+}
+
+.field {
+  display: grid;
+  gap: 10px;
+  font-weight: 500;
+}
+
+.field span {
+  font-size: 0.95rem;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border: 1px solid rgba(24, 33, 47, 0.14);
+  border-radius: 18px;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  font: inherit;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: rgba(198, 93, 59, 0.68);
+  box-shadow: 0 0 0 4px rgba(198, 93, 59, 0.14);
+  transform: translateY(-1px);
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 180px;
+}
+
+.honeypot-field {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.form-actions {
+  display: grid;
+  gap: 12px;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 16px 24px;
+  background: linear-gradient(135deg, var(--accent) 0%, #dd8a53 100%);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+  box-shadow: 0 16px 30px rgba(198, 93, 59, 0.26);
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
+}
+
+.status-message {
+  min-height: 24px;
+  margin: 0;
+  color: var(--muted);
+}
+
+.status-message.is-success {
+  color: var(--success);
+}
+
+.status-message.is-error {
+  color: var(--error);
+}
+
+@media (max-width: 900px) {
+  .page-shell {
+    width: min(100% - 24px, 720px);
+    grid-template-columns: 1fr;
+    padding: 24px 0 40px;
+  }
+
+  .hero-panel,
+  .form-panel {
+    padding: 28px;
+  }
+
+  .hero-panel h1 {
+    max-width: none;
+    font-size: clamp(2.8rem, 13vw, 4.4rem);
+  }
+}

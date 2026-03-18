@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install -r src/contact_handler/requirements.txt cfn-lint
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Setup AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate SAM template
+        run: sam validate --template-file template.yaml
+
+      - name: Build SAM application
+        run: sam build --template-file template.yaml

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Serverless Contact App</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero-panel">
+        <p class="eyebrow">AWS Serverless Demo</p>
+        <h1>Contact us through a fully managed web app.</h1>
+        <p class="hero-copy">
+          The page is served from Amazon S3 through CloudFront. Form submissions flow to API Gateway,
+          Lambda, and Amazon SNS for email notifications.
+        </p>
+        <ul class="architecture-list">
+          <li>S3 + CloudFront for the static frontend</li>
+          <li>API Gateway HTTP API for the public endpoint</li>
+          <li>Lambda Python for validation and processing</li>
+          <li>SNS email subscription for notifications</li>
+        </ul>
+      </section>
+
+      <section class="form-panel" aria-labelledby="contact-title">
+        <div class="panel-header">
+          <p class="eyebrow">Contact form</p>
+          <h2 id="contact-title">Send a message</h2>
+        </div>
+
+        <form id="contact-form" novalidate>
+          <label class="field">
+            <span>Name</span>
+            <input id="name" name="name" type="text" maxlength="100" required />
+          </label>
+
+          <label class="field">
+            <span>Email</span>
+            <input id="email" name="email" type="email" inputmode="email" required />
+          </label>
+
+          <label class="field">
+            <span>Message</span>
+            <textarea id="message" name="message" rows="6" maxlength="2000" required></textarea>
+          </label>
+
+          <div class="honeypot-field" aria-hidden="true">
+            <label for="website">Website</label>
+            <input id="website" name="website" type="text" autocomplete="off" tabindex="-1" />
+          </div>
+
+          <div class="form-actions">
+            <button id="submit-button" type="submit">Send message</button>
+            <p id="status-message" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

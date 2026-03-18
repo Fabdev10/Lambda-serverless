@@ -1,0 +1,1 @@
+"""Lambda contact handler package."""
