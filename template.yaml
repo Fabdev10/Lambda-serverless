@@ -12,6 +12,11 @@ Parameters:
     Type: String
     Description: Email address that will receive SNS notifications.
 
+  AdminToken:
+    Type: String
+    NoEcho: true
+    Description: Secret token required to call the admin submissions endpoint.
+
   FrontendIndexDocument:
     Type: String
     Default: index.html
@@ -90,8 +95,10 @@ Resources:
           - !Sub 'https://${CloudFrontDistribution.DomainName}'
         AllowHeaders:
           - content-type
+          - x-admin-token
         AllowMethods:
           - POST
+          - GET
           - OPTIONS
         MaxAge: 86400
 
@@ -105,9 +112,13 @@ Resources:
       Policies:
         - SNSPublishMessagePolicy:
             TopicName: !GetAtt ContactTopic.TopicName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubmissionsTable
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref ContactTopic
+          SUBMISSIONS_TABLE: !Ref SubmissionsTable
+          ADMIN_TOKEN: !Ref AdminToken
           ALLOWED_ORIGIN: !Sub 'https://${CloudFrontDistribution.DomainName}'
       Events:
         SubmitContact:
@@ -116,6 +127,24 @@ Resources:
             ApiId: !Ref ContactApi
             Path: /contact
             Method: POST
+        ListSubmissions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApi
+            Path: /submissions
+            Method: GET
+
+  SubmissionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-submissions'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: submission_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: submission_id
+          KeyType: HASH
 
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -172,3 +201,7 @@ Outputs:
   SnsTopicArn:
     Description: SNS topic ARN used by Lambda.
     Value: !Ref ContactTopic
+
+  SubmissionsTableName:
+    Description: DynamoDB table that stores contact submissions.
+    Value: !Ref SubmissionsTable

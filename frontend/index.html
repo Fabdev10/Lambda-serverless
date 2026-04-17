@@ -25,7 +25,7 @@
           <li>S3 + CloudFront for the static frontend</li>
           <li>API Gateway HTTP API for the public endpoint</li>
           <li>Lambda Python for validation and processing</li>
-          <li>SNS email subscription for notifications</li>
+          <li>DynamoDB + SNS for archive and notifications</li>
         </ul>
       </section>
 
@@ -61,6 +61,70 @@
             <p id="status-message" class="status-message" role="status" aria-live="polite"></p>
           </div>
         </form>
+      </section>
+
+      <section class="admin-panel" aria-labelledby="admin-title">
+        <div class="panel-header">
+          <p class="eyebrow">Admin area</p>
+          <h2 id="admin-title">Recent submissions</h2>
+        </div>
+
+        <form id="admin-form" class="admin-controls" novalidate>
+          <label class="field">
+            <span>Admin token</span>
+            <input
+              id="admin-token"
+              name="adminToken"
+              type="password"
+              autocomplete="off"
+              placeholder="Paste your x-admin-token"
+              required
+            />
+          </label>
+
+          <label class="field field-inline">
+            <span>Limit</span>
+            <input id="admin-limit" name="limit" type="number" min="1" max="100" value="20" />
+          </label>
+
+          <label class="field field-inline">
+            <span>Range</span>
+            <select id="admin-range" name="rangeDays">
+              <option value="all">All</option>
+              <option value="1">Last 24h</option>
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+            </select>
+          </label>
+
+          <button id="admin-load-button" type="submit">Load submissions</button>
+        </form>
+
+        <p id="admin-status-message" class="status-message" role="status" aria-live="polite"></p>
+
+        <div class="admin-table-wrap">
+          <table class="admin-table" aria-label="Recent contact submissions">
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Name</th>
+                <th scope="col">Email</th>
+                <th scope="col">Message</th>
+              </tr>
+            </thead>
+            <tbody id="submissions-tbody">
+              <tr>
+                <td colspan="4" class="empty-row">No submissions loaded yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="admin-footer-actions">
+          <button id="admin-load-more-button" class="button-secondary" type="button" disabled>
+            Load more
+          </button>
+        </div>
       </section>
     </main>
 

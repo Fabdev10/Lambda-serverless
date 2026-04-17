@@ -10,6 +10,7 @@ Browser
     -> S3 static website assets
   -> API Gateway HTTP API
     -> Lambda (Python)
+      -> DynamoDB table (submission archive)
       -> SNS topic
         -> Email notification
 ```
@@ -21,6 +22,8 @@ Browser
 - API Gateway HTTP API endpoint for form submissions.
 - Lambda function in Python with payload validation.
 - Honeypot anti-spam protection on frontend and Lambda.
+- DynamoDB persistence for every valid submission.
+- Admin API endpoint to list recent submissions with token-based access.
 - SNS topic that sends an email notification for each valid submission.
 - AWS SAM template for infrastructure as code.
 - GitHub Actions for CI and deployment.
@@ -57,7 +60,8 @@ Browser
 - Amazon S3: stores the static frontend files.
 - Amazon CloudFront: serves the frontend over HTTPS.
 - Amazon API Gateway HTTP API: exposes the `POST /contact` endpoint.
-- AWS Lambda: validates the form payload and publishes it to SNS.
+- AWS Lambda: validates payloads, stores submissions on DynamoDB, publishes to SNS, and serves an admin listing endpoint.
+- Amazon DynamoDB: stores contact requests for auditing and follow-up.
 - Amazon SNS: sends an email notification for every submission.
 
 ## Prerequisites
@@ -82,6 +86,7 @@ Recommended answers for the guided deploy:
 - Stack name: `contact-webapp`
 - AWS region: `eu-west-1` or another supported region
 - Parameter `NotificationEmail`: the email address that should receive the SNS notification
+- Parameter `AdminToken`: secret token used to protect `GET /submissions`
 - Allow SAM CLI IAM role creation: `Y`
 
 After deployment, confirm the SNS subscription from the email sent by AWS. Until the subscription is confirmed, notifications will not arrive.
@@ -103,6 +108,15 @@ aws cloudformation describe-stacks `
   --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" `
   --output text
 ```
+
+The frontend now includes an admin panel in the same page. To list submissions:
+
+- Open the deployed frontend URL.
+- In the "Admin area" section, paste your `AdminToken` in the token field.
+- Choose a `limit` (1-100), select a time range, and click `Load submissions`.
+- Use `Load more` to request the next page from DynamoDB.
+
+The admin panel calls `GET /submissions` using header `x-admin-token`, masks emails in the UI, and filters rows client-side by time range.
 
 ## Local Testing
 
@@ -149,6 +163,44 @@ Success response:
 }
 ```
 
+Admin listing endpoint:
+
+- Method: `GET`
+- Path: `/submissions`
+- Header required: `x-admin-token: <AdminToken>`
+- Optional query parameter: `limit` (default `20`, max `100`)
+- Optional query parameter: `cursor` (pagination token from previous response)
+
+Admin success response:
+
+```json
+{
+  "count": 2,
+  "next_cursor": "eyJzdWJtaXNzaW9uX2lkIjogIjliYmJkM2U4LTkzYjItNGY0NS1hNmI5LTMwNTJmNWM2NjFjZCJ9",
+  "items": [
+    {
+      "submission_id": "9bbbd3e8-93b2-4f45-a6b9-3052f5c661cd",
+      "created_at": "2026-04-17T10:12:04.531481+00:00",
+      "name": "Fabio Rossi",
+      "email": "fabio@example.com",
+      "message": "Ciao, avrei bisogno di una consulenza.",
+      "source_ip": "203.0.113.10",
+      "user_agent": "Mozilla/5.0"
+    }
+  ]
+}
+```
+
+When `next_cursor` is empty, there are no additional pages.
+
+Unauthorized admin response:
+
+```json
+{
+  "error": "Unauthorized."
+}
+```
+
 Validation error response:
 
 ```json
@@ -190,6 +242,7 @@ The workflow deploys the stack, resolves the CloudFormation outputs, injects the
 - API Gateway CORS is restricted to the CloudFront domain created by the stack.
 - The first frontend deployment must happen after the stack exists, because it depends on the generated API endpoint and bucket output.
 - Bucket names must be globally unique. If the chosen `ProjectName` collides, change it during deployment.
+- Keep `AdminToken` secret. Rotate it periodically by updating the stack parameter.
 
 ## Next Improvements
 

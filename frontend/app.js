@@ -2,7 +2,19 @@
   var form = document.getElementById("contact-form");
   var submitButton = document.getElementById("submit-button");
   var statusMessage = document.getElementById("status-message");
+  var adminForm = document.getElementById("admin-form");
+  var adminLoadButton = document.getElementById("admin-load-button");
+  var adminLoadMoreButton = document.getElementById("admin-load-more-button");
+  var adminStatusMessage = document.getElementById("admin-status-message");
+  var submissionsTbody = document.getElementById("submissions-tbody");
   var config = window.APP_CONFIG || {};
+  var adminState = {
+    token: "",
+    limit: "20",
+    rangeDays: "all",
+    nextCursor: "",
+    items: []
+  };
 
   function setStatus(message, type) {
     statusMessage.textContent = message;
@@ -10,6 +22,163 @@
     if (type) {
       statusMessage.classList.add("is-" + type);
     }
+  }
+
+  function setAdminStatus(message, type) {
+    if (!adminStatusMessage) {
+      return;
+    }
+
+    adminStatusMessage.textContent = message;
+    adminStatusMessage.className = "status-message";
+    if (type) {
+      adminStatusMessage.classList.add("is-" + type);
+    }
+  }
+
+  function isConfiguredApiUrl(url) {
+    return !!url && url.indexOf("__CONTACT_API_URL__") === -1;
+  }
+
+  function getSubmissionsApiUrl() {
+    if (!isConfiguredApiUrl(config.contactApiUrl)) {
+      return "";
+    }
+
+    try {
+      var url = new URL(config.contactApiUrl);
+      url.pathname = url.pathname.replace(/\/contact\/?$/, "/submissions");
+      url.search = "";
+      return url.toString();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function clearSubmissionsTable(message) {
+    if (!submissionsTbody) {
+      return;
+    }
+
+    submissionsTbody.innerHTML = "";
+    var row = document.createElement("tr");
+    var cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "empty-row";
+    cell.textContent = message;
+    row.appendChild(cell);
+    submissionsTbody.appendChild(row);
+  }
+
+  function formatDate(dateText) {
+    if (!dateText) {
+      return "-";
+    }
+
+    var date = new Date(dateText);
+    if (isNaN(date.getTime())) {
+      return dateText;
+    }
+
+    return date.toLocaleString();
+  }
+
+  function renderSubmissions(items) {
+    if (!submissionsTbody) {
+      return;
+    }
+
+    submissionsTbody.innerHTML = "";
+
+    if (!Array.isArray(items) || items.length === 0) {
+      clearSubmissionsTable("No submissions found.");
+      return;
+    }
+
+    items.forEach(function (item) {
+      var row = document.createElement("tr");
+
+      var whenCell = document.createElement("td");
+      whenCell.textContent = formatDate(item.created_at);
+
+      var nameCell = document.createElement("td");
+      nameCell.textContent = item.name || "-";
+
+      var emailCell = document.createElement("td");
+      emailCell.textContent = maskEmail(item.email || "");
+
+      var messageCell = document.createElement("td");
+      messageCell.className = "message-cell";
+      messageCell.textContent = item.message || "-";
+
+      row.appendChild(whenCell);
+      row.appendChild(nameCell);
+      row.appendChild(emailCell);
+      row.appendChild(messageCell);
+
+      submissionsTbody.appendChild(row);
+    });
+  }
+
+  function maskEmail(email) {
+    if (!email || email.indexOf("@") === -1) {
+      return "-";
+    }
+
+    var parts = email.split("@");
+    var local = parts[0];
+    var domain = parts[1];
+    var localVisible = local.slice(0, 2);
+    var domainParts = domain.split(".");
+    var domainName = domainParts[0] || "";
+    var tld = domainParts.slice(1).join(".");
+    var maskedLocal = localVisible + "*".repeat(Math.max(1, local.length - localVisible.length));
+    var maskedDomain = (domainName.slice(0, 1) || "*") + "*".repeat(Math.max(1, domainName.length - 1));
+    return maskedLocal + "@" + maskedDomain + (tld ? "." + tld : "");
+  }
+
+  function filterItemsByRange(items, rangeDays) {
+    if (!Array.isArray(items) || rangeDays === "all") {
+      return items || [];
+    }
+
+    var days = parseInt(rangeDays, 10);
+    if (isNaN(days) || days <= 0) {
+      return items;
+    }
+
+    var threshold = Date.now() - days * 24 * 60 * 60 * 1000;
+    return items.filter(function (item) {
+      var createdAt = new Date(item.created_at || "").getTime();
+      if (isNaN(createdAt)) {
+        return false;
+      }
+      return createdAt >= threshold;
+    });
+  }
+
+  function mergeUniqueSubmissions(existing, incoming) {
+    var byId = {};
+    var merged = [];
+
+    existing.concat(incoming).forEach(function (item) {
+      var id = item && item.submission_id ? item.submission_id : "";
+      var key = id || (item.email || "") + "|" + (item.created_at || "") + "|" + (item.message || "");
+      if (!byId[key]) {
+        byId[key] = true;
+        merged.push(item);
+      }
+    });
+
+    return merged;
+  }
+
+  function updateLoadMoreButton() {
+    if (!adminLoadMoreButton) {
+      return;
+    }
+
+    adminLoadMoreButton.disabled = !adminState.nextCursor;
   }
 
   function readFormData() {
@@ -36,7 +205,7 @@
   async function submitForm(event) {
     event.preventDefault();
 
-    if (!config.contactApiUrl || config.contactApiUrl.indexOf("__CONTACT_API_URL__") !== -1) {
+    if (!isConfiguredApiUrl(config.contactApiUrl)) {
       setStatus("The frontend is not configured with an API endpoint yet.", "error");
       return;
     }
@@ -75,5 +244,107 @@
     }
   }
 
+  function readAdminForm() {
+    return {
+      token: adminForm.adminToken.value.trim(),
+      limit: adminForm.limit.value.trim() || "20",
+      rangeDays: adminForm.rangeDays.value || "all"
+    };
+  }
+
+  async function fetchSubmissionsPage(token, limit, cursor) {
+    var submissionsUrl = getSubmissionsApiUrl();
+    var requestUrl = submissionsUrl + "?limit=" + encodeURIComponent(limit);
+    if (cursor) {
+      requestUrl += "&cursor=" + encodeURIComponent(cursor);
+    }
+
+    var response = await fetch(requestUrl, {
+      method: "GET",
+      headers: {
+        "x-admin-token": token
+      }
+    });
+
+    var data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to load submissions.");
+    }
+
+    return data;
+  }
+
+  function refreshAdminTable() {
+    var filteredItems = filterItemsByRange(adminState.items, adminState.rangeDays);
+    renderSubmissions(filteredItems);
+    updateLoadMoreButton();
+    setAdminStatus("Loaded " + filteredItems.length + " submission(s) in current filter.", "success");
+  }
+
+  async function loadSubmissions(event) {
+    event.preventDefault();
+
+    var submissionsUrl = getSubmissionsApiUrl();
+    if (!submissionsUrl) {
+      setAdminStatus("The frontend is not configured with an API endpoint yet.", "error");
+      return;
+    }
+
+    var adminData = readAdminForm();
+    if (!adminData.token) {
+      setAdminStatus("Admin token is required.", "error");
+      return;
+    }
+
+    adminLoadButton.disabled = true;
+    setAdminStatus("Loading recent submissions...");
+
+    try {
+      var data = await fetchSubmissionsPage(adminData.token, adminData.limit, "");
+      adminState.token = adminData.token;
+      adminState.limit = adminData.limit;
+      adminState.rangeDays = adminData.rangeDays;
+      adminState.nextCursor = data.next_cursor || "";
+      adminState.items = Array.isArray(data.items) ? data.items : [];
+      refreshAdminTable();
+    } catch (error) {
+      clearSubmissionsTable("No submissions loaded yet.");
+      adminState.nextCursor = "";
+      adminState.items = [];
+      updateLoadMoreButton();
+      setAdminStatus(error.message || "Unable to load submissions.", "error");
+    } finally {
+      adminLoadButton.disabled = false;
+    }
+  }
+
+  async function loadMoreSubmissions() {
+    if (!adminState.nextCursor || !adminState.token) {
+      return;
+    }
+
+    adminLoadMoreButton.disabled = true;
+    setAdminStatus("Loading more submissions...");
+
+    try {
+      var data = await fetchSubmissionsPage(adminState.token, adminState.limit, adminState.nextCursor);
+      var incoming = Array.isArray(data.items) ? data.items : [];
+      adminState.items = mergeUniqueSubmissions(adminState.items, incoming);
+      adminState.nextCursor = data.next_cursor || "";
+      refreshAdminTable();
+    } catch (error) {
+      updateLoadMoreButton();
+      setAdminStatus(error.message || "Unable to load more submissions.", "error");
+    }
+  }
+
   form.addEventListener("submit", submitForm);
+
+  if (adminForm) {
+    adminForm.addEventListener("submit", loadSubmissions);
+  }
+
+  if (adminLoadMoreButton) {
+    adminLoadMoreButton.addEventListener("click", loadMoreSubmissions);
+  }
 })();

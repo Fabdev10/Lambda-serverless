@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import uuid
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timezone
 
 try:
@@ -13,6 +15,9 @@ EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 MAX_NAME_LENGTH = 100
 MAX_MESSAGE_LENGTH = 2000
 HONEYPOT_FIELD = "website"
+ADMIN_TOKEN_HEADER = "x-admin-token"
+DEFAULT_LIST_LIMIT = 20
+MAX_LIST_LIMIT = 100
 
 
 def get_sns_client():
@@ -22,13 +27,28 @@ def get_sns_client():
     return boto3.client("sns")
 
 
+def get_dynamodb_resource():
+    if boto3 is None:
+        raise RuntimeError("boto3 is required to access DynamoDB")
+
+    return boto3.resource("dynamodb")
+
+
+def get_submissions_table():
+    table_name = os.environ.get("SUBMISSIONS_TABLE")
+    if not table_name:
+        raise RuntimeError("SUBMISSIONS_TABLE environment variable is not configured")
+
+    return get_dynamodb_resource().Table(table_name)
+
+
 def build_response(status_code, payload):
     return {
         "statusCode": status_code,
         "headers": {
             "Access-Control-Allow-Origin": os.environ.get("ALLOWED_ORIGIN", "*"),
-            "Access-Control-Allow-Headers": "content-type",
-            "Access-Control-Allow-Methods": "POST,OPTIONS",
+            "Access-Control-Allow-Headers": "content-type,x-admin-token",
+            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
             "Content-Type": "application/json",
         },
         "body": json.dumps(payload),
@@ -53,6 +73,68 @@ def parse_event_body(event):
         return body
 
     raise ValueError("Unsupported request body")
+
+
+def get_admin_token_from_request(event):
+    headers = event.get("headers") or {}
+    if not isinstance(headers, dict):
+        return ""
+
+    for key, value in headers.items():
+        if key and key.lower() == ADMIN_TOKEN_HEADER:
+            return (value or "").strip()
+
+    return ""
+
+
+def parse_limit(event):
+    query_params = event.get("queryStringParameters") or {}
+    if not isinstance(query_params, dict):
+        return DEFAULT_LIST_LIMIT
+
+    limit_raw = query_params.get("limit")
+    if not limit_raw:
+        return DEFAULT_LIST_LIMIT
+
+    try:
+        limit_value = int(limit_raw)
+    except (TypeError, ValueError):
+        return DEFAULT_LIST_LIMIT
+
+    if limit_value < 1:
+        return 1
+    if limit_value > MAX_LIST_LIMIT:
+        return MAX_LIST_LIMIT
+
+    return limit_value
+
+
+def parse_cursor(event):
+    query_params = event.get("queryStringParameters") or {}
+    if not isinstance(query_params, dict):
+        return None
+
+    cursor = (query_params.get("cursor") or "").strip()
+    if not cursor:
+        return None
+
+    try:
+        decoded = urlsafe_b64decode(cursor.encode("utf-8")).decode("utf-8")
+        last_key = json.loads(decoded)
+    except Exception as error:
+        raise ValueError("Invalid pagination cursor.") from error
+
+    if not isinstance(last_key, dict):
+        raise ValueError("Invalid pagination cursor.")
+
+    return last_key
+
+
+def encode_cursor(last_evaluated_key):
+    if not last_evaluated_key:
+        return ""
+
+    return urlsafe_b64encode(json.dumps(last_evaluated_key).encode("utf-8")).decode("utf-8")
 
 
 def is_honeypot_triggered(payload):
@@ -124,10 +206,69 @@ def publish_notification(payload):
     )
 
 
+def save_submission(payload, event):
+    request_context = event.get("requestContext") or {}
+    http_context = request_context.get("http") or {}
+    source_ip = http_context.get("sourceIp", "")
+    user_agent = http_context.get("userAgent", "")
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    item = {
+        "submission_id": str(uuid.uuid4()),
+        "created_at": created_at,
+        "name": payload["name"],
+        "email": payload["email"],
+        "message": payload["message"],
+        "source_ip": source_ip,
+        "user_agent": user_agent,
+    }
+
+    get_submissions_table().put_item(Item=item)
+
+
+def list_submissions(limit, cursor):
+    scan_kwargs = {"Limit": limit}
+    if cursor:
+        scan_kwargs["ExclusiveStartKey"] = cursor
+
+    response = get_submissions_table().scan(**scan_kwargs)
+    items = response.get("Items", [])
+    next_cursor = encode_cursor(response.get("LastEvaluatedKey"))
+
+    return {"items": items, "next_cursor": next_cursor}
+
+
 def lambda_handler(event, _context):
     method = event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod")
     if method == "OPTIONS":
         return build_response(200, {"message": "ok"})
+
+    if method == "GET":
+        expected_token = os.environ.get("ADMIN_TOKEN", "")
+        request_token = get_admin_token_from_request(event)
+        if not expected_token or request_token != expected_token:
+            return build_response(401, {"error": "Unauthorized."})
+
+        try:
+            limit = parse_limit(event)
+            cursor = parse_cursor(event)
+        except ValueError as error:
+            return build_response(400, {"error": str(error)})
+
+        try:
+            result = list_submissions(limit, cursor)
+        except Exception:
+            return build_response(500, {"error": "Unable to list submissions right now."})
+
+        submissions = result["items"]
+        return build_response(
+            200,
+            {
+                "count": len(submissions),
+                "items": submissions,
+                "next_cursor": result["next_cursor"],
+            },
+        )
 
     try:
         payload = parse_event_body(event)
@@ -144,6 +285,7 @@ def lambda_handler(event, _context):
 
     try:
         publish_notification(payload)
+        save_submission(payload, event)
     except Exception:
         return build_response(500, {"error": "Unable to process the request right now."})
 

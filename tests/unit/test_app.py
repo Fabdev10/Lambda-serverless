@@ -1,10 +1,13 @@
 import json
 import os
 import unittest
+from base64 import urlsafe_b64encode
 from unittest.mock import patch
 
 os.environ.setdefault("ALLOWED_ORIGIN", "https://example.com")
 os.environ.setdefault("SNS_TOPIC_ARN", "arn:aws:sns:eu-west-1:123456789012:test-topic")
+os.environ.setdefault("SUBMISSIONS_TABLE", "contact-submissions")
+os.environ.setdefault("ADMIN_TOKEN", "admin-secret-token")
 
 from src.contact_handler import app
 
@@ -21,9 +24,11 @@ def build_event(body, method="POST"):
 
 
 class ContactHandlerTests(unittest.TestCase):
+    @patch("src.contact_handler.app.get_submissions_table")
     @patch("src.contact_handler.app.get_sns_client")
-    def test_returns_success_for_valid_payload(self, get_sns_client_mock):
+    def test_returns_success_for_valid_payload(self, get_sns_client_mock, get_submissions_table_mock):
         publish_mock = get_sns_client_mock.return_value.publish
+        put_item_mock = get_submissions_table_mock.return_value.put_item
         response = app.lambda_handler(
             build_event(
                 {
@@ -40,6 +45,7 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(body["message"], "Message received successfully.")
         publish_mock.assert_called_once()
+        put_item_mock.assert_called_once()
 
     def test_returns_validation_errors(self):
         response = app.lambda_handler(build_event({"name": "", "email": "bad-email", "message": ""}), None)
@@ -70,8 +76,9 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 400)
         self.assertEqual(body["error"], "Invalid JSON payload.")
 
+    @patch("src.contact_handler.app.get_submissions_table")
     @patch("src.contact_handler.app.get_sns_client")
-    def test_honeypot_submission_is_accepted_without_publish(self, get_sns_client_mock):
+    def test_honeypot_submission_is_accepted_without_publish(self, get_sns_client_mock, get_submissions_table_mock):
         response = app.lambda_handler(
             build_event(
                 {
@@ -89,9 +96,11 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(body["message"], "Message received successfully.")
         get_sns_client_mock.return_value.publish.assert_not_called()
+        get_submissions_table_mock.return_value.put_item.assert_not_called()
 
+    @patch("src.contact_handler.app.get_submissions_table")
     @patch("src.contact_handler.app.get_sns_client")
-    def test_returns_server_error_when_sns_fails(self, get_sns_client_mock):
+    def test_returns_server_error_when_sns_fails(self, get_sns_client_mock, get_submissions_table_mock):
         get_sns_client_mock.return_value.publish.side_effect = RuntimeError("sns failed")
         response = app.lambda_handler(
             build_event(
@@ -108,6 +117,81 @@ class ContactHandlerTests(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 500)
         self.assertEqual(body["error"], "Unable to process the request right now.")
+        get_submissions_table_mock.return_value.put_item.assert_not_called()
+
+    def test_admin_endpoint_requires_token(self):
+        event = build_event({}, method="GET")
+        event["headers"] = {}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(body["error"], "Unauthorized.")
+
+    @patch("src.contact_handler.app.get_submissions_table")
+    def test_admin_endpoint_returns_submissions(self, get_submissions_table_mock):
+        get_submissions_table_mock.return_value.scan.return_value = {
+            "Items": [
+                {
+                    "submission_id": "2",
+                    "created_at": "2026-01-02T00:00:00+00:00",
+                    "name": "Mario",
+                    "email": "mario@example.com",
+                    "message": "Messaggio 2",
+                },
+                {
+                    "submission_id": "1",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "name": "Luigi",
+                    "email": "luigi@example.com",
+                    "message": "Messaggio 1",
+                },
+            ],
+            "LastEvaluatedKey": {"submission_id": "1"},
+        }
+
+        event = build_event({}, method="GET")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"limit": "1"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(body["items"][0]["submission_id"], "2")
+        self.assertTrue(body["next_cursor"])
+        get_submissions_table_mock.return_value.scan.assert_called_once_with(Limit=1)
+
+    @patch("src.contact_handler.app.get_submissions_table")
+    def test_admin_endpoint_supports_cursor(self, get_submissions_table_mock):
+        cursor = urlsafe_b64encode(json.dumps({"submission_id": "2"}).encode("utf-8")).decode("utf-8")
+        get_submissions_table_mock.return_value.scan.return_value = {
+            "Items": [],
+        }
+
+        event = build_event({}, method="GET")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"limit": "10", "cursor": cursor}
+
+        response = app.lambda_handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+        get_submissions_table_mock.return_value.scan.assert_called_once_with(
+            Limit=10, ExclusiveStartKey={"submission_id": "2"}
+        )
+
+    def test_admin_endpoint_rejects_invalid_cursor(self):
+        event = build_event({}, method="GET")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"cursor": "%%%invalid%%%"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertEqual(body["error"], "Invalid pagination cursor.")
 
 
 if __name__ == "__main__":
