@@ -100,6 +100,21 @@
           <button id="admin-load-button" type="submit">Load submissions</button>
         </form>
 
+        <div class="admin-search-bar">
+          <label class="field field-inline">
+            <span>Search</span>
+            <input
+              id="admin-search"
+              type="search"
+              placeholder="Filter by name or email…"
+              autocomplete="off"
+            />
+          </label>
+          <button id="admin-export-button" class="button-secondary" type="button" disabled>
+            Export CSV
+          </button>
+        </div>
+
         <p id="admin-status-message" class="status-message" role="status" aria-live="polite"></p>
 
         <div class="admin-table-wrap">
@@ -110,6 +125,7 @@
                 <th scope="col">Name</th>
                 <th scope="col">Email</th>
                 <th scope="col">Message</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody id="submissions-tbody">

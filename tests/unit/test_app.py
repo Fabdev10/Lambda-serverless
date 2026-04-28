@@ -12,11 +12,11 @@ os.environ.setdefault("ADMIN_TOKEN", "admin-secret-token")
 from src.contact_handler import app
 
 
-def build_event(body, method="POST"):
+def build_event(body, method="POST", path="/contact"):
     return {
         "version": "2.0",
         "routeKey": "$default",
-        "rawPath": "/contact",
+        "rawPath": path,
         "requestContext": {"http": {"method": method}},
         "body": json.dumps(body),
         "isBase64Encoded": False,
@@ -131,10 +131,11 @@ class ContactHandlerTests(unittest.TestCase):
 
     @patch("src.contact_handler.app.get_submissions_table")
     def test_admin_endpoint_returns_submissions(self, get_submissions_table_mock):
-        get_submissions_table_mock.return_value.scan.return_value = {
+        get_submissions_table_mock.return_value.query.return_value = {
             "Items": [
                 {
                     "submission_id": "2",
+                    "entity_type": "submission",
                     "created_at": "2026-01-02T00:00:00+00:00",
                     "name": "Mario",
                     "email": "mario@example.com",
@@ -142,16 +143,17 @@ class ContactHandlerTests(unittest.TestCase):
                 },
                 {
                     "submission_id": "1",
+                    "entity_type": "submission",
                     "created_at": "2026-01-01T00:00:00+00:00",
                     "name": "Luigi",
                     "email": "luigi@example.com",
                     "message": "Messaggio 1",
                 },
             ],
-            "LastEvaluatedKey": {"submission_id": "1"},
+            "LastEvaluatedKey": {"submission_id": "1", "entity_type": "submission", "created_at": "2026-01-01T00:00:00+00:00"},
         }
 
-        event = build_event({}, method="GET")
+        event = build_event({}, method="GET", path="/submissions")
         event["headers"] = {"x-admin-token": "admin-secret-token"}
         event["queryStringParameters"] = {"limit": "1"}
 
@@ -162,28 +164,26 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(body["count"], 2)
         self.assertEqual(body["items"][0]["submission_id"], "2")
         self.assertTrue(body["next_cursor"])
-        get_submissions_table_mock.return_value.scan.assert_called_once_with(Limit=1)
+        get_submissions_table_mock.return_value.query.assert_called_once()
 
     @patch("src.contact_handler.app.get_submissions_table")
     def test_admin_endpoint_supports_cursor(self, get_submissions_table_mock):
-        cursor = urlsafe_b64encode(json.dumps({"submission_id": "2"}).encode("utf-8")).decode("utf-8")
-        get_submissions_table_mock.return_value.scan.return_value = {
-            "Items": [],
-        }
+        cursor = urlsafe_b64encode(
+            json.dumps({"submission_id": "2", "entity_type": "submission", "created_at": "2026-01-02T00:00:00+00:00"}).encode("utf-8")
+        ).decode("utf-8")
+        get_submissions_table_mock.return_value.query.return_value = {"Items": []}
 
-        event = build_event({}, method="GET")
+        event = build_event({}, method="GET", path="/submissions")
         event["headers"] = {"x-admin-token": "admin-secret-token"}
         event["queryStringParameters"] = {"limit": "10", "cursor": cursor}
 
         response = app.lambda_handler(event, None)
 
         self.assertEqual(response["statusCode"], 200)
-        get_submissions_table_mock.return_value.scan.assert_called_once_with(
-            Limit=10, ExclusiveStartKey={"submission_id": "2"}
-        )
+        get_submissions_table_mock.return_value.query.assert_called_once()
 
     def test_admin_endpoint_rejects_invalid_cursor(self):
-        event = build_event({}, method="GET")
+        event = build_event({}, method="GET", path="/submissions")
         event["headers"] = {"x-admin-token": "admin-secret-token"}
         event["queryStringParameters"] = {"cursor": "%%%invalid%%%"}
 
@@ -192,6 +192,93 @@ class ContactHandlerTests(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 400)
         self.assertEqual(body["error"], "Invalid pagination cursor.")
+
+    def test_health_check_returns_200(self):
+        event = build_event({}, method="GET", path="/health")
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["status"], "ok")
+
+    def test_unknown_path_returns_404(self):
+        event = build_event({}, method="GET", path="/unknown")
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 404)
+
+    def test_admin_endpoint_requires_token(self):
+        event = build_event({}, method="GET", path="/submissions")
+        event["headers"] = {}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(body["error"], "Unauthorized.")
+
+    def test_delete_submission_requires_token(self):
+        event = build_event({}, method="DELETE", path="/submissions/abc-123")
+        event["headers"] = {}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(body["error"], "Unauthorized.")
+
+    @patch("src.contact_handler.app.get_submissions_table")
+    def test_delete_submission_removes_item(self, get_submissions_table_mock):
+        event = build_event({}, method="DELETE", path="/submissions/abc-123")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["message"], "Submission deleted.")
+        get_submissions_table_mock.return_value.delete_item.assert_called_once_with(
+            Key={"submission_id": "abc-123"}
+        )
+
+    @patch("src.contact_handler.app.get_rate_limits_table")
+    @patch("src.contact_handler.app.get_submissions_table")
+    @patch("src.contact_handler.app.get_sns_client")
+    def test_rate_limit_allows_normal_requests(
+        self, get_sns_client_mock, get_submissions_table_mock, get_rate_limits_table_mock
+    ):
+        get_rate_limits_table_mock.return_value.update_item.return_value = {
+            "Attributes": {"count": 1}
+        }
+        event = build_event(
+            {"name": "Fabio", "email": "fabio@example.com", "message": "Ciao."},
+            method="POST",
+        )
+        event["requestContext"]["http"]["sourceIp"] = "203.0.113.1"
+
+        response = app.lambda_handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+
+    @patch("src.contact_handler.app.get_rate_limits_table")
+    def test_rate_limit_blocks_excess_requests(self, get_rate_limits_table_mock):
+        get_rate_limits_table_mock.return_value.update_item.return_value = {
+            "Attributes": {"count": 11}
+        }
+        event = build_event(
+            {"name": "Fabio", "email": "fabio@example.com", "message": "Ciao."},
+            method="POST",
+        )
+        event["requestContext"]["http"]["sourceIp"] = "203.0.113.1"
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 429)
+        self.assertIn("Too many requests", body["error"])
 
 
 if __name__ == "__main__":

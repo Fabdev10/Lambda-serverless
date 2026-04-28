@@ -29,6 +29,7 @@ Globals:
     MemorySize: 256
     Architectures:
       - x86_64
+    Tracing: Active
     Environment:
       Variables:
         POWERTOOLS_SERVICE_NAME: !Ref ProjectName
@@ -99,6 +100,7 @@ Resources:
         AllowMethods:
           - POST
           - GET
+          - DELETE
           - OPTIONS
         MaxAge: 86400
 
@@ -114,10 +116,13 @@ Resources:
             TopicName: !GetAtt ContactTopic.TopicName
         - DynamoDBCrudPolicy:
             TableName: !Ref SubmissionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RateLimitsTable
       Environment:
         Variables:
           SNS_TOPIC_ARN: !Ref ContactTopic
           SUBMISSIONS_TABLE: !Ref SubmissionsTable
+          RATE_LIMITS_TABLE: !Ref RateLimitsTable
           ADMIN_TOKEN: !Ref AdminToken
           ALLOWED_ORIGIN: !Sub 'https://${CloudFrontDistribution.DomainName}'
       Events:
@@ -133,6 +138,18 @@ Resources:
             ApiId: !Ref ContactApi
             Path: /submissions
             Method: GET
+        DeleteSubmission:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApi
+            Path: /submissions/{submission_id}
+            Method: DELETE
+        HealthCheck:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApi
+            Path: /health
+            Method: GET
 
   SubmissionsTable:
     Type: AWS::DynamoDB::Table
@@ -142,9 +159,75 @@ Resources:
       AttributeDefinitions:
         - AttributeName: submission_id
           AttributeType: S
+        - AttributeName: entity_type
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
       KeySchema:
         - AttributeName: submission_id
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: ByEntityTypeCreatedAt
+          KeySchema:
+            - AttributeName: entity_type
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  RateLimitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-rate-limits'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: ip_minute
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ip_minute
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-lambda-errors'
+      AlarmDescription: Triggers when the contact handler Lambda produces errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ContactFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref ContactTopic
+
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-lambda-throttles'
+      AlarmDescription: Triggers when the contact handler Lambda is throttled.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ContactFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref ContactTopic
 
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -205,3 +288,11 @@ Outputs:
   SubmissionsTableName:
     Description: DynamoDB table that stores contact submissions.
     Value: !Ref SubmissionsTable
+
+  RateLimitsTableName:
+    Description: DynamoDB table used for per-IP rate limiting.
+    Value: !Ref RateLimitsTable
+
+  HealthEndpoint:
+    Description: Health check endpoint URL.
+    Value: !Sub 'https://${ContactApi}.execute-api.${AWS::Region}.amazonaws.com/health'

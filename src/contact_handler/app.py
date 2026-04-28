@@ -1,14 +1,17 @@
 import json
 import os
 import re
+import time
 import uuid
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timezone
 
 try:
     import boto3
+    from boto3.dynamodb.conditions import Key as DynamoKey
 except ModuleNotFoundError:
     boto3 = None
+    DynamoKey = None
 
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -18,6 +21,9 @@ HONEYPOT_FIELD = "website"
 ADMIN_TOKEN_HEADER = "x-admin-token"
 DEFAULT_LIST_LIMIT = 20
 MAX_LIST_LIMIT = 100
+RATELIMIT_MAX_PER_MINUTE = 10
+SUBMISSIONS_GSI_NAME = "ByEntityTypeCreatedAt"
+SUBMISSIONS_ENTITY_TYPE = "submission"
 
 
 def get_sns_client():
@@ -38,6 +44,14 @@ def get_submissions_table():
     table_name = os.environ.get("SUBMISSIONS_TABLE")
     if not table_name:
         raise RuntimeError("SUBMISSIONS_TABLE environment variable is not configured")
+
+    return get_dynamodb_resource().Table(table_name)
+
+
+def get_rate_limits_table():
+    table_name = os.environ.get("RATE_LIMITS_TABLE")
+    if not table_name:
+        return None
 
     return get_dynamodb_resource().Table(table_name)
 
@@ -215,6 +229,7 @@ def save_submission(payload, event):
 
     item = {
         "submission_id": str(uuid.uuid4()),
+        "entity_type": SUBMISSIONS_ENTITY_TYPE,
         "created_at": created_at,
         "name": payload["name"],
         "email": payload["email"],
@@ -227,48 +242,111 @@ def save_submission(payload, event):
 
 
 def list_submissions(limit, cursor):
-    scan_kwargs = {"Limit": limit}
+    query_kwargs = {
+        "IndexName": SUBMISSIONS_GSI_NAME,
+        "KeyConditionExpression": DynamoKey("entity_type").eq(SUBMISSIONS_ENTITY_TYPE),
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
     if cursor:
-        scan_kwargs["ExclusiveStartKey"] = cursor
+        query_kwargs["ExclusiveStartKey"] = cursor
 
-    response = get_submissions_table().scan(**scan_kwargs)
+    response = get_submissions_table().query(**query_kwargs)
     items = response.get("Items", [])
     next_cursor = encode_cursor(response.get("LastEvaluatedKey"))
 
     return {"items": items, "next_cursor": next_cursor}
 
 
-def lambda_handler(event, _context):
-    method = event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod")
-    if method == "OPTIONS":
-        return build_response(200, {"message": "ok"})
+def delete_submission(submission_id):
+    get_submissions_table().delete_item(Key={"submission_id": submission_id})
 
-    if method == "GET":
-        expected_token = os.environ.get("ADMIN_TOKEN", "")
-        request_token = get_admin_token_from_request(event)
-        if not expected_token or request_token != expected_token:
-            return build_response(401, {"error": "Unauthorized."})
 
-        try:
-            limit = parse_limit(event)
-            cursor = parse_cursor(event)
-        except ValueError as error:
-            return build_response(400, {"error": str(error)})
+def check_rate_limit(source_ip):
+    if not source_ip:
+        return True
 
-        try:
-            result = list_submissions(limit, cursor)
-        except Exception:
-            return build_response(500, {"error": "Unable to list submissions right now."})
+    table = get_rate_limits_table()
+    if table is None:
+        return True
 
-        submissions = result["items"]
-        return build_response(
-            200,
-            {
-                "count": len(submissions),
-                "items": submissions,
-                "next_cursor": result["next_cursor"],
-            },
+    window = str(int(time.time()) // 60)
+    key = f"{source_ip}#{window}"
+    expires_at = int(time.time()) + 120
+
+    try:
+        response = table.update_item(
+            Key={"ip_minute": key},
+            UpdateExpression="ADD #cnt :one SET expires_at = :exp",
+            ExpressionAttributeNames={"#cnt": "count"},
+            ExpressionAttributeValues={":one": 1, ":exp": expires_at},
+            ReturnValues="UPDATED_NEW",
         )
+        count = int(response["Attributes"].get("count", 1))
+        return count <= RATELIMIT_MAX_PER_MINUTE
+    except Exception:
+        return True
+
+
+def handle_health():
+    return build_response(
+        200,
+        {"status": "ok", "service": os.environ.get("POWERTOOLS_SERVICE_NAME", "contact-webapp")},
+    )
+
+
+def handle_list_submissions(event):
+    expected_token = os.environ.get("ADMIN_TOKEN", "")
+    request_token = get_admin_token_from_request(event)
+    if not expected_token or request_token != expected_token:
+        return build_response(401, {"error": "Unauthorized."})
+
+    try:
+        limit = parse_limit(event)
+        cursor = parse_cursor(event)
+    except ValueError as error:
+        return build_response(400, {"error": str(error)})
+
+    try:
+        result = list_submissions(limit, cursor)
+    except Exception:
+        return build_response(500, {"error": "Unable to list submissions right now."})
+
+    submissions = result["items"]
+    return build_response(
+        200,
+        {
+            "count": len(submissions),
+            "items": submissions,
+            "next_cursor": result["next_cursor"],
+        },
+    )
+
+
+def handle_delete_submission(event, submission_id):
+    expected_token = os.environ.get("ADMIN_TOKEN", "")
+    request_token = get_admin_token_from_request(event)
+    if not expected_token or request_token != expected_token:
+        return build_response(401, {"error": "Unauthorized."})
+
+    if not submission_id:
+        return build_response(400, {"error": "Submission ID is required."})
+
+    try:
+        delete_submission(submission_id)
+    except Exception:
+        return build_response(500, {"error": "Unable to delete submission right now."})
+
+    return build_response(200, {"message": "Submission deleted."})
+
+
+def handle_contact(event):
+    request_context = event.get("requestContext") or {}
+    http_context = request_context.get("http") or {}
+    source_ip = http_context.get("sourceIp", "")
+
+    if not check_rate_limit(source_ip):
+        return build_response(429, {"error": "Too many requests. Please try again later."})
 
     try:
         payload = parse_event_body(event)
@@ -290,3 +368,30 @@ def lambda_handler(event, _context):
         return build_response(500, {"error": "Unable to process the request right now."})
 
     return build_response(200, {"message": "Message received successfully."})
+
+
+def lambda_handler(event, _context):
+    method = (
+        (event.get("requestContext") or {}).get("http", {}).get("method")
+        or event.get("httpMethod")
+        or ""
+    ).upper()
+    path = event.get("rawPath", "")
+
+    if method == "OPTIONS":
+        return build_response(200, {"message": "ok"})
+
+    if method == "GET" and path == "/health":
+        return handle_health()
+
+    if method == "GET" and path == "/submissions":
+        return handle_list_submissions(event)
+
+    if method == "DELETE" and path.startswith("/submissions/"):
+        submission_id = path.split("/submissions/", 1)[1].strip("/")
+        return handle_delete_submission(event, submission_id)
+
+    if method == "POST":
+        return handle_contact(event)
+
+    return build_response(404, {"error": "Not found."})

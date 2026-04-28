@@ -22,11 +22,17 @@ Browser
 - API Gateway HTTP API endpoint for form submissions.
 - Lambda function in Python with payload validation.
 - Honeypot anti-spam protection on frontend and Lambda.
-- DynamoDB persistence for every valid submission.
+- Per-IP rate limiting (10 requests/minute) backed by DynamoDB with TTL.
+- DynamoDB persistence for every valid submission, with a GSI for sorted queries.
 - Admin API endpoint to list recent submissions with token-based access.
+- Admin endpoint to delete individual submissions (`DELETE /submissions/{id}`).
+- Health check endpoint (`GET /health`) for monitoring.
 - SNS topic that sends an email notification for each valid submission.
+- CloudWatch alarms for Lambda errors and throttles (delivered via the same SNS topic).
+- AWS X-Ray active tracing on all Lambda invocations.
+- Frontend admin panel: search by name/email, delete rows, export visible results to CSV.
 - AWS SAM template for infrastructure as code.
-- GitHub Actions for CI and deployment.
+- GitHub Actions for CI (tests + SAM validation) and deployment.
 
 ## Repository Layout
 
@@ -59,10 +65,12 @@ Browser
 
 - Amazon S3: stores the static frontend files.
 - Amazon CloudFront: serves the frontend over HTTPS.
-- Amazon API Gateway HTTP API: exposes the `POST /contact` endpoint.
-- AWS Lambda: validates payloads, stores submissions on DynamoDB, publishes to SNS, and serves an admin listing endpoint.
-- Amazon DynamoDB: stores contact requests for auditing and follow-up.
-- Amazon SNS: sends an email notification for every submission.
+- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `DELETE /submissions/{id}`, and `GET /health` endpoints.
+- AWS Lambda: validates payloads, enforces rate limits, stores submissions on DynamoDB, publishes to SNS, and serves admin endpoints.
+- Amazon DynamoDB: stores contact submissions (with a GSI for sorted listing) and per-IP rate-limit counters (with TTL).
+- Amazon SNS: sends email notifications for every submission and receives CloudWatch alarm notifications.
+- AWS X-Ray: distributed tracing for all Lambda invocations.
+- Amazon CloudWatch: error and throttle alarms for the Lambda function.
 
 ## Prerequisites
 
@@ -114,6 +122,9 @@ The frontend now includes an admin panel in the same page. To list submissions:
 - Open the deployed frontend URL.
 - In the "Admin area" section, paste your `AdminToken` in the token field.
 - Choose a `limit` (1-100), select a time range, and click `Load submissions`.
+- Use the **Search** box to filter visible rows by name or email (client-side).
+- Click **Delete** on a row to permanently remove that submission via `DELETE /submissions/{id}`.
+- Click **Export CSV** to download the currently visible results as a CSV file.
 - Use `Load more` to request the next page from DynamoDB.
 
 The admin panel calls `GET /submissions` using header `x-admin-token`, masks emails in the UI, and filters rows client-side by time range.
@@ -170,6 +181,19 @@ Admin listing endpoint:
 - Header required: `x-admin-token: <AdminToken>`
 - Optional query parameter: `limit` (default `20`, max `100`)
 - Optional query parameter: `cursor` (pagination token from previous response)
+- Results are sorted newest-first via a DynamoDB GSI on `created_at`.
+
+Delete submission endpoint:
+
+- Method: `DELETE`
+- Path: `/submissions/{submission_id}`
+- Header required: `x-admin-token: <AdminToken>`
+
+Health check endpoint:
+
+- Method: `GET`
+- Path: `/health`
+- No authentication required.
 
 Admin success response:
 

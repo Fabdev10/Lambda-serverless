@@ -14,6 +14,9 @@ on:
       notification-email:
         description: Email address subscribed to SNS notifications
         required: true
+      admin-token:
+        description: Secret token for the admin submissions endpoint
+        required: true
 
 permissions:
   id-token: write
@@ -54,7 +57,9 @@ jobs:
           --resolve-s3
           --no-confirm-changeset
           --no-fail-on-empty-changeset
-          --parameter-overrides NotificationEmail=${{ inputs.notification-email }}
+          --parameter-overrides
+          NotificationEmail=${{ inputs.notification-email }}
+          AdminToken=${{ inputs.admin-token }}
 
       - name: Resolve stack outputs
         id: outputs

@@ -7,11 +7,14 @@
   var adminLoadMoreButton = document.getElementById("admin-load-more-button");
   var adminStatusMessage = document.getElementById("admin-status-message");
   var submissionsTbody = document.getElementById("submissions-tbody");
+  var adminSearchInput = document.getElementById("admin-search");
+  var adminExportButton = document.getElementById("admin-export-button");
   var config = window.APP_CONFIG || {};
   var adminState = {
     token: "",
     limit: "20",
     rangeDays: "all",
+    searchTerm: "",
     nextCursor: "",
     items: []
   };
@@ -63,7 +66,7 @@
     submissionsTbody.innerHTML = "";
     var row = document.createElement("tr");
     var cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = 5;
     cell.className = "empty-row";
     cell.textContent = message;
     row.appendChild(cell);
@@ -111,10 +114,21 @@
       messageCell.className = "message-cell";
       messageCell.textContent = item.message || "-";
 
+      var actionsCell = document.createElement("td");
+      var deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "button-danger button-small";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", function () {
+        deleteSubmission(item.submission_id, row);
+      });
+      actionsCell.appendChild(deleteBtn);
+
       row.appendChild(whenCell);
       row.appendChild(nameCell);
       row.appendChild(emailCell);
       row.appendChild(messageCell);
+      row.appendChild(actionsCell);
 
       submissionsTbody.appendChild(row);
     });
@@ -154,6 +168,19 @@
         return false;
       }
       return createdAt >= threshold;
+    });
+  }
+
+  function filterItemsBySearch(items, term) {
+    if (!term) {
+      return items;
+    }
+
+    var lower = term.toLowerCase();
+    return items.filter(function (item) {
+      var name = (item.name || "").toLowerCase();
+      var email = (item.email || "").toLowerCase();
+      return name.indexOf(lower) !== -1 || email.indexOf(lower) !== -1;
     });
   }
 
@@ -276,9 +303,13 @@
 
   function refreshAdminTable() {
     var filteredItems = filterItemsByRange(adminState.items, adminState.rangeDays);
+    filteredItems = filterItemsBySearch(filteredItems, adminState.searchTerm);
     renderSubmissions(filteredItems);
     updateLoadMoreButton();
     setAdminStatus("Loaded " + filteredItems.length + " submission(s) in current filter.", "success");
+    if (adminExportButton) {
+      adminExportButton.disabled = filteredItems.length === 0;
+    }
   }
 
   async function loadSubmissions(event) {
@@ -304,6 +335,7 @@
       adminState.token = adminData.token;
       adminState.limit = adminData.limit;
       adminState.rangeDays = adminData.rangeDays;
+      adminState.searchTerm = adminSearchInput ? adminSearchInput.value.trim() : "";
       adminState.nextCursor = data.next_cursor || "";
       adminState.items = Array.isArray(data.items) ? data.items : [];
       refreshAdminTable();
@@ -316,6 +348,78 @@
     } finally {
       adminLoadButton.disabled = false;
     }
+  }
+
+  async function deleteSubmission(submissionId, rowElement) {
+    if (!submissionId || !adminState.token) {
+      return;
+    }
+
+    var submissionsUrl = getSubmissionsApiUrl();
+    if (!submissionsUrl) {
+      return;
+    }
+
+    if (!window.confirm("Delete this submission? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      var response = await fetch(submissionsUrl + "/" + encodeURIComponent(submissionId), {
+        method: "DELETE",
+        headers: { "x-admin-token": adminState.token }
+      });
+
+      if (!response.ok) {
+        var data = await response.json();
+        throw new Error(data.error || "Unable to delete submission.");
+      }
+
+      adminState.items = adminState.items.filter(function (item) {
+        return item.submission_id !== submissionId;
+      });
+
+      if (rowElement && rowElement.parentNode) {
+        rowElement.parentNode.removeChild(rowElement);
+      }
+
+      setAdminStatus("Submission deleted.", "success");
+      if (adminExportButton) {
+        adminExportButton.disabled = adminState.items.length === 0;
+      }
+    } catch (error) {
+      setAdminStatus(error.message || "Unable to delete submission.", "error");
+    }
+  }
+
+  function exportCsv() {
+    var filteredItems = filterItemsByRange(adminState.items, adminState.rangeDays);
+    filteredItems = filterItemsBySearch(filteredItems, adminState.searchTerm);
+
+    if (filteredItems.length === 0) {
+      return;
+    }
+
+    var header = ["When", "Name", "Email", "Message"];
+    var rows = filteredItems.map(function (item) {
+      return [
+        item.created_at || "",
+        item.name || "",
+        item.email || "",
+        (item.message || "").replace(/\n/g, " ")
+      ].map(function (cell) {
+        return '"' + String(cell).replace(/"/g, '""') + '"';
+      }).join(",");
+    });
+
+    var csv = [header.join(",")].concat(rows).join("\r\n");
+    var blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = "submissions.csv";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function loadMoreSubmissions() {
@@ -346,5 +450,18 @@
 
   if (adminLoadMoreButton) {
     adminLoadMoreButton.addEventListener("click", loadMoreSubmissions);
+  }
+
+  if (adminSearchInput) {
+    adminSearchInput.addEventListener("input", function () {
+      adminState.searchTerm = adminSearchInput.value.trim();
+      if (adminState.items.length > 0) {
+        refreshAdminTable();
+      }
+    });
+  }
+
+  if (adminExportButton) {
+    adminExportButton.addEventListener("click", exportCsv);
   }
 })();
