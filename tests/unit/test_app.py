@@ -193,6 +193,33 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 400)
         self.assertEqual(body["error"], "Invalid pagination cursor.")
 
+    def test_stats_endpoint_requires_token(self):
+        event = build_event({}, method="GET", path="/submissions/stats")
+        event["headers"] = {}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(body["error"], "Unauthorized.")
+
+    @patch("src.contact_handler.app.count_submissions")
+    def test_stats_endpoint_returns_aggregated_totals(self, count_submissions_mock):
+        count_submissions_mock.side_effect = [42, 5, 12, 20]
+        event = build_event({}, method="GET", path="/submissions/stats")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["totals"]["all_time"], 42)
+        self.assertEqual(body["totals"]["last_24_hours"], 5)
+        self.assertEqual(body["totals"]["last_7_days"], 12)
+        self.assertEqual(body["totals"]["last_30_days"], 20)
+        self.assertTrue(body["generated_at"])
+        self.assertEqual(count_submissions_mock.call_count, 4)
+
     def test_health_check_returns_200(self):
         event = build_event({}, method="GET", path="/health")
 

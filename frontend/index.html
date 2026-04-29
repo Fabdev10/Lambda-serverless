@@ -100,6 +100,25 @@
           <button id="admin-load-button" type="submit">Load submissions</button>
         </form>
 
+        <section class="stats-grid" aria-label="Submission analytics">
+          <article class="stat-card">
+            <p class="stat-label">All time</p>
+            <p id="stat-all-time" class="stat-value">-</p>
+          </article>
+          <article class="stat-card">
+            <p class="stat-label">Last 24h</p>
+            <p id="stat-last-24h" class="stat-value">-</p>
+          </article>
+          <article class="stat-card">
+            <p class="stat-label">Last 7 days</p>
+            <p id="stat-last-7d" class="stat-value">-</p>
+          </article>
+          <article class="stat-card">
+            <p class="stat-label">Last 30 days</p>
+            <p id="stat-last-30d" class="stat-value">-</p>
+          </article>
+        </section>
+
         <div class="admin-search-bar">
           <label class="field field-inline">
             <span>Search</span>
@@ -130,7 +149,7 @@
             </thead>
             <tbody id="submissions-tbody">
               <tr>
-                <td colspan="4" class="empty-row">No submissions loaded yet.</td>
+                <td colspan="5" class="empty-row">No submissions loaded yet.</td>
               </tr>
             </tbody>
           </table>

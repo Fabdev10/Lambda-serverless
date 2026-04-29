@@ -9,6 +9,10 @@
   var submissionsTbody = document.getElementById("submissions-tbody");
   var adminSearchInput = document.getElementById("admin-search");
   var adminExportButton = document.getElementById("admin-export-button");
+  var statAllTime = document.getElementById("stat-all-time");
+  var statLast24h = document.getElementById("stat-last-24h");
+  var statLast7d = document.getElementById("stat-last-7d");
+  var statLast30d = document.getElementById("stat-last-30d");
   var config = window.APP_CONFIG || {};
   var adminState = {
     token: "",
@@ -71,6 +75,34 @@
     cell.textContent = message;
     row.appendChild(cell);
     submissionsTbody.appendChild(row);
+  }
+
+  function setStatsFallback() {
+    [statAllTime, statLast24h, statLast7d, statLast30d].forEach(function (node) {
+      if (node) {
+        node.textContent = "-";
+      }
+    });
+  }
+
+  function renderStats(totals) {
+    if (!totals) {
+      setStatsFallback();
+      return;
+    }
+
+    if (statAllTime) {
+      statAllTime.textContent = String(totals.all_time || 0);
+    }
+    if (statLast24h) {
+      statLast24h.textContent = String(totals.last_24_hours || 0);
+    }
+    if (statLast7d) {
+      statLast7d.textContent = String(totals.last_7_days || 0);
+    }
+    if (statLast30d) {
+      statLast30d.textContent = String(totals.last_30_days || 0);
+    }
   }
 
   function formatDate(dateText) {
@@ -301,6 +333,23 @@
     return data;
   }
 
+  async function fetchSubmissionStats(token) {
+    var submissionsUrl = getSubmissionsApiUrl();
+    var response = await fetch(submissionsUrl + "/stats", {
+      method: "GET",
+      headers: {
+        "x-admin-token": token
+      }
+    });
+
+    var data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to load submission stats.");
+    }
+
+    return data;
+  }
+
   function refreshAdminTable() {
     var filteredItems = filterItemsByRange(adminState.items, adminState.rangeDays);
     filteredItems = filterItemsBySearch(filteredItems, adminState.searchTerm);
@@ -331,18 +380,25 @@
     setAdminStatus("Loading recent submissions...");
 
     try {
-      var data = await fetchSubmissionsPage(adminData.token, adminData.limit, "");
+      var responses = await Promise.all([
+        fetchSubmissionsPage(adminData.token, adminData.limit, ""),
+        fetchSubmissionStats(adminData.token)
+      ]);
+      var data = responses[0];
+      var statsData = responses[1];
       adminState.token = adminData.token;
       adminState.limit = adminData.limit;
       adminState.rangeDays = adminData.rangeDays;
       adminState.searchTerm = adminSearchInput ? adminSearchInput.value.trim() : "";
       adminState.nextCursor = data.next_cursor || "";
       adminState.items = Array.isArray(data.items) ? data.items : [];
+      renderStats(statsData.totals || {});
       refreshAdminTable();
     } catch (error) {
       clearSubmissionsTable("No submissions loaded yet.");
       adminState.nextCursor = "";
       adminState.items = [];
+      setStatsFallback();
       updateLoadMoreButton();
       setAdminStatus(error.message || "Unable to load submissions.", "error");
     } finally {
@@ -378,6 +434,13 @@
       adminState.items = adminState.items.filter(function (item) {
         return item.submission_id !== submissionId;
       });
+
+      try {
+        var statsData = await fetchSubmissionStats(adminState.token);
+        renderStats(statsData.totals || {});
+      } catch (_error) {
+        setStatsFallback();
+      }
 
       if (rowElement && rowElement.parentNode) {
         rowElement.parentNode.removeChild(rowElement);
@@ -464,4 +527,6 @@
   if (adminExportButton) {
     adminExportButton.addEventListener("click", exportCsv);
   }
+
+  setStatsFallback();
 })();

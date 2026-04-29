@@ -25,12 +25,14 @@ Browser
 - Per-IP rate limiting (10 requests/minute) backed by DynamoDB with TTL.
 - DynamoDB persistence for every valid submission, with a GSI for sorted queries.
 - Admin API endpoint to list recent submissions with token-based access.
+- Admin analytics endpoint to aggregate submissions over key time windows (`GET /submissions/stats`).
 - Admin endpoint to delete individual submissions (`DELETE /submissions/{id}`).
 - Health check endpoint (`GET /health`) for monitoring.
 - SNS topic that sends an email notification for each valid submission.
 - CloudWatch alarms for Lambda errors and throttles (delivered via the same SNS topic).
 - AWS X-Ray active tracing on all Lambda invocations.
 - Frontend admin panel: search by name/email, delete rows, export visible results to CSV.
+- Frontend admin dashboard cards: all-time, 24h, 7d, and 30d submission counters.
 - AWS SAM template for infrastructure as code.
 - GitHub Actions for CI (tests + SAM validation) and deployment.
 
@@ -65,7 +67,7 @@ Browser
 
 - Amazon S3: stores the static frontend files.
 - Amazon CloudFront: serves the frontend over HTTPS.
-- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `DELETE /submissions/{id}`, and `GET /health` endpoints.
+- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `DELETE /submissions/{id}`, and `GET /health` endpoints.
 - AWS Lambda: validates payloads, enforces rate limits, stores submissions on DynamoDB, publishes to SNS, and serves admin endpoints.
 - Amazon DynamoDB: stores contact submissions (with a GSI for sorted listing) and per-IP rate-limit counters (with TTL).
 - Amazon SNS: sends email notifications for every submission and receives CloudWatch alarm notifications.
@@ -123,6 +125,7 @@ The frontend now includes an admin panel in the same page. To list submissions:
 - In the "Admin area" section, paste your `AdminToken` in the token field.
 - Choose a `limit` (1-100), select a time range, and click `Load submissions`.
 - Use the **Search** box to filter visible rows by name or email (client-side).
+- KPI cards above the table show all-time plus rolling 24h, 7d, and 30d totals.
 - Click **Delete** on a row to permanently remove that submission via `DELETE /submissions/{id}`.
 - Click **Export CSV** to download the currently visible results as a CSV file.
 - Use `Load more` to request the next page from DynamoDB.
@@ -189,6 +192,12 @@ Delete submission endpoint:
 - Path: `/submissions/{submission_id}`
 - Header required: `x-admin-token: <AdminToken>`
 
+Admin stats endpoint:
+
+- Method: `GET`
+- Path: `/submissions/stats`
+- Header required: `x-admin-token: <AdminToken>`
+
 Health check endpoint:
 
 - Method: `GET`
@@ -212,6 +221,20 @@ Admin success response:
       "user_agent": "Mozilla/5.0"
     }
   ]
+}
+```
+
+Admin stats success response:
+
+```json
+{
+  "generated_at": "2026-04-29T14:22:31.201349+00:00",
+  "totals": {
+    "all_time": 42,
+    "last_24_hours": 5,
+    "last_7_days": 12,
+    "last_30_days": 20
+  }
 }
 ```
 

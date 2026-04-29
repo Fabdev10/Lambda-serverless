@@ -235,6 +235,44 @@ button:disabled {
   box-shadow: 0 10px 20px rgba(24, 33, 47, 0.1);
 }
 
+.admin-search-bar {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+
+.stats-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.stat-card {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(24, 33, 47, 0.12);
+}
+
+.stat-label {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.stat-value {
+  margin: 8px 0 0;
+  font-size: 1.8rem;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
 .admin-footer-actions {
   margin-top: 16px;
   display: flex;
@@ -313,6 +351,10 @@ button:disabled {
 
   .admin-controls {
     grid-template-columns: 1fr;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
 
   .admin-table {

@@ -4,7 +4,7 @@ import re
 import time
 import uuid
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     import boto3
@@ -62,7 +62,7 @@ def build_response(status_code, payload):
         "headers": {
             "Access-Control-Allow-Origin": os.environ.get("ALLOWED_ORIGIN", "*"),
             "Access-Control-Allow-Headers": "content-type,x-admin-token",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+            "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
             "Content-Type": "application/json",
         },
         "body": json.dumps(payload),
@@ -258,6 +258,39 @@ def list_submissions(limit, cursor):
     return {"items": items, "next_cursor": next_cursor}
 
 
+def count_submissions(created_at_start=None, created_at_end=None):
+    key_condition = DynamoKey("entity_type").eq(SUBMISSIONS_ENTITY_TYPE)
+
+    if created_at_start and created_at_end:
+        key_condition = key_condition & DynamoKey("created_at").between(
+            created_at_start, created_at_end
+        )
+    elif created_at_start:
+        key_condition = key_condition & DynamoKey("created_at").gte(created_at_start)
+    elif created_at_end:
+        key_condition = key_condition & DynamoKey("created_at").lte(created_at_end)
+
+    total = 0
+    exclusive_start_key = None
+
+    while True:
+        query_kwargs = {
+            "IndexName": SUBMISSIONS_GSI_NAME,
+            "KeyConditionExpression": key_condition,
+            "Select": "COUNT",
+        }
+        if exclusive_start_key:
+            query_kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+        response = get_submissions_table().query(**query_kwargs)
+        total += int(response.get("Count", 0))
+        exclusive_start_key = response.get("LastEvaluatedKey")
+        if not exclusive_start_key:
+            break
+
+    return total
+
+
 def delete_submission(submission_id):
     get_submissions_table().delete_item(Key={"submission_id": submission_id})
 
@@ -340,6 +373,40 @@ def handle_delete_submission(event, submission_id):
     return build_response(200, {"message": "Submission deleted."})
 
 
+def handle_submission_stats(event):
+    expected_token = os.environ.get("ADMIN_TOKEN", "")
+    request_token = get_admin_token_from_request(event)
+    if not expected_token or request_token != expected_token:
+        return build_response(401, {"error": "Unauthorized."})
+
+    now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.isoformat()
+    window_24h = (now_utc - timedelta(hours=24)).isoformat()
+    window_7d = (now_utc - timedelta(days=7)).isoformat()
+    window_30d = (now_utc - timedelta(days=30)).isoformat()
+
+    try:
+        total = count_submissions()
+        last_24_hours = count_submissions(created_at_start=window_24h, created_at_end=now_iso)
+        last_7_days = count_submissions(created_at_start=window_7d, created_at_end=now_iso)
+        last_30_days = count_submissions(created_at_start=window_30d, created_at_end=now_iso)
+    except Exception:
+        return build_response(500, {"error": "Unable to load submission stats right now."})
+
+    return build_response(
+        200,
+        {
+            "generated_at": now_iso,
+            "totals": {
+                "all_time": total,
+                "last_24_hours": last_24_hours,
+                "last_7_days": last_7_days,
+                "last_30_days": last_30_days,
+            },
+        },
+    )
+
+
 def handle_contact(event):
     request_context = event.get("requestContext") or {}
     http_context = request_context.get("http") or {}
@@ -386,6 +453,9 @@ def lambda_handler(event, _context):
 
     if method == "GET" and path == "/submissions":
         return handle_list_submissions(event)
+
+    if method == "GET" and path == "/submissions/stats":
+        return handle_submission_stats(event)
 
     if method == "DELETE" and path.startswith("/submissions/"):
         submission_id = path.split("/submissions/", 1)[1].strip("/")
