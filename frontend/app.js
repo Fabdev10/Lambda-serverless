@@ -13,6 +13,8 @@
   var statLast24h = document.getElementById("stat-last-24h");
   var statLast7d = document.getElementById("stat-last-7d");
   var statLast30d = document.getElementById("stat-last-30d");
+  var timelineBars = document.getElementById("timeline-bars");
+  var trendLabel = document.getElementById("trend-label");
   var config = window.APP_CONFIG || {};
   var adminState = {
     token: "",
@@ -85,6 +87,16 @@
     });
   }
 
+  function setTimelineFallback(message) {
+    if (timelineBars) {
+      timelineBars.innerHTML = "";
+    }
+
+    if (trendLabel) {
+      trendLabel.textContent = message || "No trend data loaded";
+    }
+  }
+
   function renderStats(totals) {
     if (!totals) {
       setStatsFallback();
@@ -102,6 +114,51 @@
     }
     if (statLast30d) {
       statLast30d.textContent = String(totals.last_30_days || 0);
+    }
+  }
+
+  function getTimelineRequestParams() {
+    var range = adminState.rangeDays;
+    if (range === "1") {
+      return { days: 1, granularity: "hour" };
+    }
+
+    if (range === "7" || range === "30") {
+      return { days: parseInt(range, 10), granularity: "day" };
+    }
+
+    return { days: 30, granularity: "day" };
+  }
+
+  function renderTimeline(data) {
+    if (!timelineBars || !data || !Array.isArray(data.buckets) || data.buckets.length === 0) {
+      setTimelineFallback("No trend data available");
+      return;
+    }
+
+    timelineBars.innerHTML = "";
+    var maxCount = 0;
+    data.buckets.forEach(function (bucket) {
+      var value = Number(bucket.count || 0);
+      if (value > maxCount) {
+        maxCount = value;
+      }
+    });
+
+    var normalizer = maxCount > 0 ? maxCount : 1;
+    data.buckets.forEach(function (bucket) {
+      var bar = document.createElement("div");
+      var value = Number(bucket.count || 0);
+      var ratio = value / normalizer;
+      bar.className = "timeline-bar";
+      bar.style.height = Math.max(4, Math.round(ratio * 100)) + "%";
+      bar.title = (bucket.start || "") + " - " + value;
+      timelineBars.appendChild(bar);
+    });
+
+    if (trendLabel) {
+      var unit = data.granularity === "hour" ? "hourly" : "daily";
+      trendLabel.textContent = "Showing " + data.buckets.length + " " + unit + " buckets";
     }
   }
 
@@ -350,6 +407,24 @@
     return data;
   }
 
+  async function fetchSubmissionTimeline(token, days, granularity) {
+    var submissionsUrl = getSubmissionsApiUrl();
+    var query = "?days=" + encodeURIComponent(days) + "&granularity=" + encodeURIComponent(granularity);
+    var response = await fetch(submissionsUrl + "/timeline" + query, {
+      method: "GET",
+      headers: {
+        "x-admin-token": token
+      }
+    });
+
+    var data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to load submission timeline.");
+    }
+
+    return data;
+  }
+
   function refreshAdminTable() {
     var filteredItems = filterItemsByRange(adminState.items, adminState.rangeDays);
     filteredItems = filterItemsBySearch(filteredItems, adminState.searchTerm);
@@ -380,12 +455,15 @@
     setAdminStatus("Loading recent submissions...");
 
     try {
+      var timelineParams = getTimelineRequestParams();
       var responses = await Promise.all([
         fetchSubmissionsPage(adminData.token, adminData.limit, ""),
-        fetchSubmissionStats(adminData.token)
+        fetchSubmissionStats(adminData.token),
+        fetchSubmissionTimeline(adminData.token, timelineParams.days, timelineParams.granularity)
       ]);
       var data = responses[0];
       var statsData = responses[1];
+      var timelineData = responses[2];
       adminState.token = adminData.token;
       adminState.limit = adminData.limit;
       adminState.rangeDays = adminData.rangeDays;
@@ -393,12 +471,14 @@
       adminState.nextCursor = data.next_cursor || "";
       adminState.items = Array.isArray(data.items) ? data.items : [];
       renderStats(statsData.totals || {});
+      renderTimeline(timelineData);
       refreshAdminTable();
     } catch (error) {
       clearSubmissionsTable("No submissions loaded yet.");
       adminState.nextCursor = "";
       adminState.items = [];
       setStatsFallback();
+      setTimelineFallback("No trend data loaded");
       updateLoadMoreButton();
       setAdminStatus(error.message || "Unable to load submissions.", "error");
     } finally {
@@ -436,10 +516,18 @@
       });
 
       try {
-        var statsData = await fetchSubmissionStats(adminState.token);
+        var timelineParams = getTimelineRequestParams();
+        var responses = await Promise.all([
+          fetchSubmissionStats(adminState.token),
+          fetchSubmissionTimeline(adminState.token, timelineParams.days, timelineParams.granularity)
+        ]);
+        var statsData = responses[0];
+        var timelineData = responses[1];
         renderStats(statsData.totals || {});
+        renderTimeline(timelineData);
       } catch (_error) {
         setStatsFallback();
+        setTimelineFallback("No trend data loaded");
       }
 
       if (rowElement && rowElement.parentNode) {
@@ -529,4 +617,5 @@
   }
 
   setStatsFallback();
+  setTimelineFallback("No trend data loaded");
 })();

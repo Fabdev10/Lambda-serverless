@@ -220,6 +220,65 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertTrue(body["generated_at"])
         self.assertEqual(count_submissions_mock.call_count, 4)
 
+    def test_timeline_endpoint_requires_token(self):
+        event = build_event({}, method="GET", path="/submissions/timeline")
+        event["headers"] = {}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(body["error"], "Unauthorized.")
+
+    @patch("src.contact_handler.app.build_submission_timeline")
+    def test_timeline_endpoint_returns_buckets(self, build_submission_timeline_mock):
+        build_submission_timeline_mock.return_value = {
+            "generated_at": "2026-05-16T10:00:00+00:00",
+            "window_start": "2026-05-09T10:00:00+00:00",
+            "window_end": "2026-05-16T10:00:00+00:00",
+            "granularity": "day",
+            "days": 7,
+            "buckets": [
+                {"start": "2026-05-14T00:00:00+00:00", "count": 2},
+                {"start": "2026-05-15T00:00:00+00:00", "count": 1},
+                {"start": "2026-05-16T00:00:00+00:00", "count": 0},
+            ],
+        }
+
+        event = build_event({}, method="GET", path="/submissions/timeline")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"days": "7", "granularity": "day"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["granularity"], "day")
+        self.assertEqual(len(body["buckets"]), 3)
+        build_submission_timeline_mock.assert_called_once_with(7, "day")
+
+    def test_timeline_endpoint_rejects_invalid_days(self):
+        event = build_event({}, method="GET", path="/submissions/timeline")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"days": "200", "granularity": "day"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("Invalid days parameter", body["error"])
+
+    def test_timeline_endpoint_rejects_invalid_granularity(self):
+        event = build_event({}, method="GET", path="/submissions/timeline")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"days": "7", "granularity": "week"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("Invalid granularity parameter", body["error"])
+
     def test_health_check_returns_200(self):
         event = build_event({}, method="GET", path="/health")
 

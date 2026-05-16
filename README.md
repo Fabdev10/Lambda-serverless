@@ -26,6 +26,7 @@ Browser
 - DynamoDB persistence for every valid submission, with a GSI for sorted queries.
 - Admin API endpoint to list recent submissions with token-based access.
 - Admin analytics endpoint to aggregate submissions over key time windows (`GET /submissions/stats`).
+- Admin timeline endpoint to return bucketed trends (`GET /submissions/timeline`).
 - Admin endpoint to delete individual submissions (`DELETE /submissions/{id}`).
 - Health check endpoint (`GET /health`) for monitoring.
 - SNS topic that sends an email notification for each valid submission.
@@ -33,6 +34,7 @@ Browser
 - AWS X-Ray active tracing on all Lambda invocations.
 - Frontend admin panel: search by name/email, delete rows, export visible results to CSV.
 - Frontend admin dashboard cards: all-time, 24h, 7d, and 30d submission counters.
+- Frontend admin trend chart with hourly/daily buckets based on selected range.
 - AWS SAM template for infrastructure as code.
 - GitHub Actions for CI (tests + SAM validation) and deployment.
 
@@ -67,7 +69,7 @@ Browser
 
 - Amazon S3: stores the static frontend files.
 - Amazon CloudFront: serves the frontend over HTTPS.
-- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `DELETE /submissions/{id}`, and `GET /health` endpoints.
+- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `GET /submissions/timeline`, `DELETE /submissions/{id}`, and `GET /health` endpoints.
 - AWS Lambda: validates payloads, enforces rate limits, stores submissions on DynamoDB, publishes to SNS, and serves admin endpoints.
 - Amazon DynamoDB: stores contact submissions (with a GSI for sorted listing) and per-IP rate-limit counters (with TTL).
 - Amazon SNS: sends email notifications for every submission and receives CloudWatch alarm notifications.
@@ -198,6 +200,14 @@ Admin stats endpoint:
 - Path: `/submissions/stats`
 - Header required: `x-admin-token: <AdminToken>`
 
+Admin timeline endpoint:
+
+- Method: `GET`
+- Path: `/submissions/timeline`
+- Header required: `x-admin-token: <AdminToken>`
+- Optional query parameter: `days` (default `30`, allowed range `1-90`)
+- Optional query parameter: `granularity` (`hour` or `day`, default `day`)
+
 Health check endpoint:
 
 - Method: `GET`
@@ -235,6 +245,32 @@ Admin stats success response:
     "last_7_days": 12,
     "last_30_days": 20
   }
+}
+```
+
+Admin timeline success response:
+
+```json
+{
+  "generated_at": "2026-05-16T14:22:31.201349+00:00",
+  "window_start": "2026-04-16T14:22:31.201349+00:00",
+  "window_end": "2026-05-16T14:22:31.201349+00:00",
+  "granularity": "day",
+  "days": 30,
+  "buckets": [
+    {
+      "start": "2026-05-14T00:00:00+00:00",
+      "count": 4
+    },
+    {
+      "start": "2026-05-15T00:00:00+00:00",
+      "count": 7
+    },
+    {
+      "start": "2026-05-16T00:00:00+00:00",
+      "count": 2
+    }
+  ]
 }
 ```
 

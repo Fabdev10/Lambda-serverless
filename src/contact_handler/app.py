@@ -24,6 +24,9 @@ MAX_LIST_LIMIT = 100
 RATELIMIT_MAX_PER_MINUTE = 10
 SUBMISSIONS_GSI_NAME = "ByEntityTypeCreatedAt"
 SUBMISSIONS_ENTITY_TYPE = "submission"
+DEFAULT_TIMELINE_DAYS = 30
+MAX_TIMELINE_DAYS = 90
+TIMELINE_GRANULARITIES = {"hour", "day"}
 
 
 def get_sns_client():
@@ -144,6 +147,40 @@ def parse_cursor(event):
     return last_key
 
 
+def get_query_params(event):
+    query_params = event.get("queryStringParameters") or {}
+    if not isinstance(query_params, dict):
+        return {}
+
+    return query_params
+
+
+def parse_timeline_days(event):
+    query_params = get_query_params(event)
+    raw_days = (query_params.get("days") or "").strip()
+    if not raw_days:
+        return DEFAULT_TIMELINE_DAYS
+
+    try:
+        days = int(raw_days)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Invalid days parameter. Use an integer between 1 and 90.") from error
+
+    if days < 1 or days > MAX_TIMELINE_DAYS:
+        raise ValueError("Invalid days parameter. Use an integer between 1 and 90.")
+
+    return days
+
+
+def parse_timeline_granularity(event):
+    query_params = get_query_params(event)
+    granularity = (query_params.get("granularity") or "day").strip().lower()
+    if granularity not in TIMELINE_GRANULARITIES:
+        raise ValueError("Invalid granularity parameter. Use 'hour' or 'day'.")
+
+    return granularity
+
+
 def encode_cursor(last_evaluated_key):
     if not last_evaluated_key:
         return ""
@@ -256,6 +293,86 @@ def list_submissions(limit, cursor):
     next_cursor = encode_cursor(response.get("LastEvaluatedKey"))
 
     return {"items": items, "next_cursor": next_cursor}
+
+
+def floor_to_bucket(date_value, granularity):
+    if granularity == "hour":
+        return date_value.replace(minute=0, second=0, microsecond=0)
+
+    return date_value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def bucket_delta(granularity):
+    if granularity == "hour":
+        return timedelta(hours=1)
+
+    return timedelta(days=1)
+
+
+def build_submission_timeline(days, granularity):
+    now_utc = datetime.now(timezone.utc)
+    window_start = now_utc - timedelta(days=days)
+
+    key_condition = DynamoKey("entity_type").eq(SUBMISSIONS_ENTITY_TYPE) & DynamoKey("created_at").between(
+        window_start.isoformat(), now_utc.isoformat()
+    )
+
+    rows = []
+    exclusive_start_key = None
+
+    while True:
+        query_kwargs = {
+            "IndexName": SUBMISSIONS_GSI_NAME,
+            "KeyConditionExpression": key_condition,
+            "ProjectionExpression": "created_at",
+        }
+        if exclusive_start_key:
+            query_kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+        response = get_submissions_table().query(**query_kwargs)
+        rows.extend(response.get("Items", []))
+        exclusive_start_key = response.get("LastEvaluatedKey")
+        if not exclusive_start_key:
+            break
+
+    bucket_start = floor_to_bucket(window_start, granularity)
+    bucket_end = floor_to_bucket(now_utc, granularity)
+    delta = bucket_delta(granularity)
+
+    counts = {}
+    current = bucket_start
+    while current <= bucket_end:
+        counts[current.isoformat()] = 0
+        current += delta
+
+    for row in rows:
+        created_at_text = row.get("created_at")
+        if not created_at_text:
+            continue
+
+        try:
+            created_at = datetime.fromisoformat(created_at_text)
+        except ValueError:
+            continue
+
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        created_at = created_at.astimezone(timezone.utc)
+        bucket_key = floor_to_bucket(created_at, granularity).isoformat()
+        if bucket_key in counts:
+            counts[bucket_key] += 1
+
+    timeline = [{"start": key, "count": value} for key, value in sorted(counts.items())]
+
+    return {
+        "generated_at": now_utc.isoformat(),
+        "window_start": window_start.isoformat(),
+        "window_end": now_utc.isoformat(),
+        "granularity": granularity,
+        "days": days,
+        "buckets": timeline,
+    }
 
 
 def count_submissions(created_at_start=None, created_at_end=None):
@@ -407,6 +524,26 @@ def handle_submission_stats(event):
     )
 
 
+def handle_submission_timeline(event):
+    expected_token = os.environ.get("ADMIN_TOKEN", "")
+    request_token = get_admin_token_from_request(event)
+    if not expected_token or request_token != expected_token:
+        return build_response(401, {"error": "Unauthorized."})
+
+    try:
+        days = parse_timeline_days(event)
+        granularity = parse_timeline_granularity(event)
+    except ValueError as error:
+        return build_response(400, {"error": str(error)})
+
+    try:
+        payload = build_submission_timeline(days, granularity)
+    except Exception:
+        return build_response(500, {"error": "Unable to load submission timeline right now."})
+
+    return build_response(200, payload)
+
+
 def handle_contact(event):
     request_context = event.get("requestContext") or {}
     http_context = request_context.get("http") or {}
@@ -456,6 +593,9 @@ def lambda_handler(event, _context):
 
     if method == "GET" and path == "/submissions/stats":
         return handle_submission_stats(event)
+
+    if method == "GET" and path == "/submissions/timeline":
+        return handle_submission_timeline(event)
 
     if method == "DELETE" and path.startswith("/submissions/"):
         submission_id = path.split("/submissions/", 1)[1].strip("/")
