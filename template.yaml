@@ -162,6 +162,12 @@ Resources:
             ApiId: !Ref ContactApi
             Path: /health
             Method: GET
+        ServiceInfo:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApi
+            Path: /info
+            Method: GET
 
   SubmissionsTable:
     Type: AWS::DynamoDB::Table

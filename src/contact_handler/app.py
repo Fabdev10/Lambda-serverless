@@ -27,6 +27,7 @@ SUBMISSIONS_ENTITY_TYPE = "submission"
 DEFAULT_TIMELINE_DAYS = 30
 MAX_TIMELINE_DAYS = 90
 TIMELINE_GRANULARITIES = {"hour", "day"}
+DEFAULT_APP_VERSION = "1.0.0"
 
 
 def get_sns_client():
@@ -445,6 +446,22 @@ def handle_health():
     )
 
 
+def handle_info():
+    return build_response(
+        200,
+        {
+            "service": os.environ.get("POWERTOOLS_SERVICE_NAME", "contact-webapp"),
+            "version": os.environ.get("APP_VERSION", DEFAULT_APP_VERSION),
+            "status": "ok",
+            "public_endpoints": [
+                {"method": "POST", "path": "/contact"},
+                {"method": "GET", "path": "/health"},
+                {"method": "GET", "path": "/info"},
+            ],
+        },
+    )
+
+
 def handle_list_submissions(event):
     expected_token = os.environ.get("ADMIN_TOKEN", "")
     request_token = get_admin_token_from_request(event)
@@ -587,6 +604,9 @@ def lambda_handler(event, _context):
 
     if method == "GET" and path == "/health":
         return handle_health()
+
+    if method == "GET" and path == "/info":
+        return handle_info()
 
     if method == "GET" and path == "/submissions":
         return handle_list_submissions(event)

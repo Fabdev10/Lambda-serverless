@@ -288,6 +288,20 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(body["status"], "ok")
 
+    def test_info_endpoint_returns_service_metadata(self):
+        event = build_event({}, method="GET", path="/info")
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["service"], "contact-webapp")
+        self.assertIn("version", body)
+        self.assertIn({"method": "POST", "path": "/contact"}, body["public_endpoints"])
+        self.assertIn({"method": "GET", "path": "/health"}, body["public_endpoints"])
+        self.assertIn({"method": "GET", "path": "/info"}, body["public_endpoints"])
+
     def test_unknown_path_returns_404(self):
         event = build_event({}, method="GET", path="/unknown")
 

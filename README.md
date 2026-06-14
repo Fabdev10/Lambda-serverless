@@ -29,6 +29,7 @@ Browser
 - Admin timeline endpoint to return bucketed trends (`GET /submissions/timeline`).
 - Admin endpoint to delete individual submissions (`DELETE /submissions/{id}`).
 - Health check endpoint (`GET /health`) for monitoring.
+- Service metadata endpoint (`GET /info`) for quick API capability checks.
 - SNS topic that sends an email notification for each valid submission.
 - CloudWatch alarms for Lambda errors and throttles (delivered via the same SNS topic).
 - AWS X-Ray active tracing on all Lambda invocations.
@@ -69,7 +70,7 @@ Browser
 
 - Amazon S3: stores the static frontend files.
 - Amazon CloudFront: serves the frontend over HTTPS.
-- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `GET /submissions/timeline`, `DELETE /submissions/{id}`, and `GET /health` endpoints.
+- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `GET /submissions/timeline`, `DELETE /submissions/{id}`, `GET /health`, and `GET /info` endpoints.
 - AWS Lambda: validates payloads, enforces rate limits, stores submissions on DynamoDB, publishes to SNS, and serves admin endpoints.
 - Amazon DynamoDB: stores contact submissions (with a GSI for sorted listing) and per-IP rate-limit counters (with TTL).
 - Amazon SNS: sends email notifications for every submission and receives CloudWatch alarm notifications.
@@ -212,6 +213,12 @@ Health check endpoint:
 
 - Method: `GET`
 - Path: `/health`
+- No authentication required.
+
+Service metadata endpoint:
+
+- Method: `GET`
+- Path: `/info`
 - No authentication required.
 
 Admin success response:
