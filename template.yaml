@@ -150,6 +150,12 @@ Resources:
             ApiId: !Ref ContactApi
             Path: /submissions/timeline
             Method: GET
+        SubmissionSummary:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ContactApi
+            Path: /submissions/summary
+            Method: GET
         DeleteSubmission:
           Type: HttpApi
           Properties:

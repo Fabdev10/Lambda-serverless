@@ -279,6 +279,58 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 400)
         self.assertIn("Invalid granularity parameter", body["error"])
 
+    def test_summary_endpoint_requires_token(self):
+        event = build_event({}, method="GET", path="/submissions/summary")
+        event["headers"] = {}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 401)
+        self.assertEqual(body["error"], "Unauthorized.")
+
+    @patch("src.contact_handler.app.build_submission_summary")
+    def test_summary_endpoint_returns_aggregated_data(self, build_submission_summary_mock):
+        build_submission_summary_mock.return_value = {
+            "generated_at": "2026-05-16T10:00:00+00:00",
+            "window_start": "2026-05-09T10:00:00+00:00",
+            "window_end": "2026-05-16T10:00:00+00:00",
+            "days": 7,
+            "totals": {
+                "submissions": 8,
+                "unique_emails": 6,
+                "unique_domains": 3,
+            },
+            "top_domains": [
+                {"domain": "example.com", "count": 4},
+                {"domain": "sample.io", "count": 2},
+            ],
+        }
+
+        event = build_event({}, method="GET", path="/submissions/summary")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"days": "7"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(body["totals"]["submissions"], 8)
+        self.assertEqual(body["totals"]["unique_emails"], 6)
+        self.assertEqual(body["top_domains"][0]["domain"], "example.com")
+        build_submission_summary_mock.assert_called_once_with(7)
+
+    def test_summary_endpoint_rejects_invalid_days(self):
+        event = build_event({}, method="GET", path="/submissions/summary")
+        event["headers"] = {"x-admin-token": "admin-secret-token"}
+        event["queryStringParameters"] = {"days": "200"}
+
+        response = app.lambda_handler(event, None)
+        body = json.loads(response["body"])
+
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("Invalid days parameter", body["error"])
+
     def test_health_check_returns_200(self):
         event = build_event({}, method="GET", path="/health")
 
@@ -301,6 +353,7 @@ class ContactHandlerTests(unittest.TestCase):
         self.assertIn({"method": "POST", "path": "/contact"}, body["public_endpoints"])
         self.assertIn({"method": "GET", "path": "/health"}, body["public_endpoints"])
         self.assertIn({"method": "GET", "path": "/info"}, body["public_endpoints"])
+        self.assertIn({"method": "GET", "path": "/submissions/summary"}, body["admin_endpoints"])
 
     def test_unknown_path_returns_404(self):
         event = build_event({}, method="GET", path="/unknown")

@@ -27,6 +27,7 @@ Browser
 - Admin API endpoint to list recent submissions with token-based access.
 - Admin analytics endpoint to aggregate submissions over key time windows (`GET /submissions/stats`).
 - Admin timeline endpoint to return bucketed trends (`GET /submissions/timeline`).
+- Admin summary endpoint for unique email/domain insights and top domains (`GET /submissions/summary`).
 - Admin endpoint to delete individual submissions (`DELETE /submissions/{id}`).
 - Health check endpoint (`GET /health`) for monitoring.
 - Service metadata endpoint (`GET /info`) for quick API capability checks.
@@ -36,6 +37,7 @@ Browser
 - Frontend admin panel: search by name/email, delete rows, export visible results to CSV.
 - Frontend admin dashboard cards: all-time, 24h, 7d, and 30d submission counters.
 - Frontend admin trend chart with hourly/daily buckets based on selected range.
+- Frontend admin summary panel: submissions in selected window, unique emails/domains, and top email domains.
 - AWS SAM template for infrastructure as code.
 - GitHub Actions for CI (tests + SAM validation) and deployment.
 
@@ -70,7 +72,7 @@ Browser
 
 - Amazon S3: stores the static frontend files.
 - Amazon CloudFront: serves the frontend over HTTPS.
-- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `GET /submissions/timeline`, `DELETE /submissions/{id}`, `GET /health`, and `GET /info` endpoints.
+- Amazon API Gateway HTTP API: exposes the `POST /contact`, `GET /submissions`, `GET /submissions/stats`, `GET /submissions/timeline`, `GET /submissions/summary`, `DELETE /submissions/{id}`, `GET /health`, and `GET /info` endpoints.
 - AWS Lambda: validates payloads, enforces rate limits, stores submissions on DynamoDB, publishes to SNS, and serves admin endpoints.
 - Amazon DynamoDB: stores contact submissions (with a GSI for sorted listing) and per-IP rate-limit counters (with TTL).
 - Amazon SNS: sends email notifications for every submission and receives CloudWatch alarm notifications.
@@ -129,6 +131,7 @@ The frontend now includes an admin panel in the same page. To list submissions:
 - Choose a `limit` (1-100), select a time range, and click `Load submissions`.
 - Use the **Search** box to filter visible rows by name or email (client-side).
 - KPI cards above the table show all-time plus rolling 24h, 7d, and 30d totals.
+- Summary panel shows windowed submission totals, unique emails/domains, and most frequent email domains.
 - Click **Delete** on a row to permanently remove that submission via `DELETE /submissions/{id}`.
 - Click **Export CSV** to download the currently visible results as a CSV file.
 - Use `Load more` to request the next page from DynamoDB.
@@ -208,6 +211,13 @@ Admin timeline endpoint:
 - Header required: `x-admin-token: <AdminToken>`
 - Optional query parameter: `days` (default `30`, allowed range `1-90`)
 - Optional query parameter: `granularity` (`hour` or `day`, default `day`)
+
+Admin summary endpoint:
+
+- Method: `GET`
+- Path: `/submissions/summary`
+- Header required: `x-admin-token: <AdminToken>`
+- Optional query parameter: `days` (default `30`, allowed range `1-90`)
 
 Health check endpoint:
 

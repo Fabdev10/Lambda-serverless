@@ -293,6 +293,35 @@ button:disabled {
   opacity: 1;
 }
 
+.summary-panel {
+  margin-top: 14px;
+  border: 1px solid rgba(24, 33, 47, 0.12);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.top-domains {
+  margin-top: 12px;
+}
+
+.top-domains-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.top-domains-list li {
+  color: var(--ink);
+}
+
 .stat-card {
   padding: 14px 16px;
   border-radius: 16px;
@@ -398,6 +427,10 @@ button:disabled {
 
   .stats-grid {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+
+  .summary-metrics {
+    grid-template-columns: 1fr;
   }
 
   .timeline-bars {

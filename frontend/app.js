@@ -15,6 +15,10 @@
   var statLast30d = document.getElementById("stat-last-30d");
   var timelineBars = document.getElementById("timeline-bars");
   var trendLabel = document.getElementById("trend-label");
+  var summarySubmissions = document.getElementById("summary-submissions");
+  var summaryUniqueEmails = document.getElementById("summary-unique-emails");
+  var summaryUniqueDomains = document.getElementById("summary-unique-domains");
+  var topDomainsList = document.getElementById("top-domains-list");
   var config = window.APP_CONFIG || {};
   var adminState = {
     token: "",
@@ -114,6 +118,57 @@
     }
     if (statLast30d) {
       statLast30d.textContent = String(totals.last_30_days || 0);
+    }
+  }
+
+  function setSummaryFallback() {
+    [summarySubmissions, summaryUniqueEmails, summaryUniqueDomains].forEach(function (node) {
+      if (node) {
+        node.textContent = "-";
+      }
+    });
+
+    if (topDomainsList) {
+      topDomainsList.innerHTML = "";
+      var emptyItem = document.createElement("li");
+      emptyItem.className = "empty-row";
+      emptyItem.textContent = "No data loaded.";
+      topDomainsList.appendChild(emptyItem);
+    }
+  }
+
+  function renderSummary(data) {
+    if (!data || !data.totals) {
+      setSummaryFallback();
+      return;
+    }
+
+    if (summarySubmissions) {
+      summarySubmissions.textContent = String(data.totals.submissions || 0);
+    }
+    if (summaryUniqueEmails) {
+      summaryUniqueEmails.textContent = String(data.totals.unique_emails || 0);
+    }
+    if (summaryUniqueDomains) {
+      summaryUniqueDomains.textContent = String(data.totals.unique_domains || 0);
+    }
+
+    if (topDomainsList) {
+      topDomainsList.innerHTML = "";
+      var domains = Array.isArray(data.top_domains) ? data.top_domains : [];
+      if (domains.length === 0) {
+        var emptyItem = document.createElement("li");
+        emptyItem.className = "empty-row";
+        emptyItem.textContent = "No domains found in this window.";
+        topDomainsList.appendChild(emptyItem);
+        return;
+      }
+
+      domains.forEach(function (domainItem) {
+        var item = document.createElement("li");
+        item.textContent = (domainItem.domain || "unknown") + " (" + String(domainItem.count || 0) + ")";
+        topDomainsList.appendChild(item);
+      });
     }
   }
 
@@ -425,6 +480,24 @@
     return data;
   }
 
+  async function fetchSubmissionSummary(token, days) {
+    var submissionsUrl = getSubmissionsApiUrl();
+    var query = "?days=" + encodeURIComponent(days);
+    var response = await fetch(submissionsUrl + "/summary" + query, {
+      method: "GET",
+      headers: {
+        "x-admin-token": token
+      }
+    });
+
+    var data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Unable to load submission summary.");
+    }
+
+    return data;
+  }
+
   function refreshAdminTable() {
     var filteredItems = filterItemsByRange(adminState.items, adminState.rangeDays);
     filteredItems = filterItemsBySearch(filteredItems, adminState.searchTerm);
@@ -459,11 +532,13 @@
       var responses = await Promise.all([
         fetchSubmissionsPage(adminData.token, adminData.limit, ""),
         fetchSubmissionStats(adminData.token),
-        fetchSubmissionTimeline(adminData.token, timelineParams.days, timelineParams.granularity)
+        fetchSubmissionTimeline(adminData.token, timelineParams.days, timelineParams.granularity),
+        fetchSubmissionSummary(adminData.token, timelineParams.days)
       ]);
       var data = responses[0];
       var statsData = responses[1];
       var timelineData = responses[2];
+      var summaryData = responses[3];
       adminState.token = adminData.token;
       adminState.limit = adminData.limit;
       adminState.rangeDays = adminData.rangeDays;
@@ -472,6 +547,7 @@
       adminState.items = Array.isArray(data.items) ? data.items : [];
       renderStats(statsData.totals || {});
       renderTimeline(timelineData);
+      renderSummary(summaryData);
       refreshAdminTable();
     } catch (error) {
       clearSubmissionsTable("No submissions loaded yet.");
@@ -479,6 +555,7 @@
       adminState.items = [];
       setStatsFallback();
       setTimelineFallback("No trend data loaded");
+      setSummaryFallback();
       updateLoadMoreButton();
       setAdminStatus(error.message || "Unable to load submissions.", "error");
     } finally {
@@ -519,15 +596,19 @@
         var timelineParams = getTimelineRequestParams();
         var responses = await Promise.all([
           fetchSubmissionStats(adminState.token),
-          fetchSubmissionTimeline(adminState.token, timelineParams.days, timelineParams.granularity)
+          fetchSubmissionTimeline(adminState.token, timelineParams.days, timelineParams.granularity),
+          fetchSubmissionSummary(adminState.token, timelineParams.days)
         ]);
         var statsData = responses[0];
         var timelineData = responses[1];
+        var summaryData = responses[2];
         renderStats(statsData.totals || {});
         renderTimeline(timelineData);
+        renderSummary(summaryData);
       } catch (_error) {
         setStatsFallback();
         setTimelineFallback("No trend data loaded");
+        setSummaryFallback();
       }
 
       if (rowElement && rowElement.parentNode) {
@@ -618,4 +699,5 @@
 
   setStatsFallback();
   setTimelineFallback("No trend data loaded");
+  setSummaryFallback();
 })();

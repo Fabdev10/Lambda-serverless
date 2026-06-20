@@ -11,7 +11,28 @@ try:
     from boto3.dynamodb.conditions import Key as DynamoKey
 except ModuleNotFoundError:
     boto3 = None
-    DynamoKey = None
+
+    class _DynamoCondition:
+        def __and__(self, _other):
+            return self
+
+    class _DynamoKeyFallback:
+        def __init__(self, _attribute_name):
+            pass
+
+        def eq(self, _value):
+            return _DynamoCondition()
+
+        def between(self, _start, _end):
+            return _DynamoCondition()
+
+        def gte(self, _value):
+            return _DynamoCondition()
+
+        def lte(self, _value):
+            return _DynamoCondition()
+
+    DynamoKey = _DynamoKeyFallback
 
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -28,6 +49,7 @@ DEFAULT_TIMELINE_DAYS = 30
 MAX_TIMELINE_DAYS = 90
 TIMELINE_GRANULARITIES = {"hour", "day"}
 DEFAULT_APP_VERSION = "1.0.0"
+DEFAULT_SUMMARY_TOP_DOMAINS = 5
 
 
 def get_sns_client():
@@ -458,6 +480,13 @@ def handle_info():
                 {"method": "GET", "path": "/health"},
                 {"method": "GET", "path": "/info"},
             ],
+            "admin_endpoints": [
+                {"method": "GET", "path": "/submissions"},
+                {"method": "GET", "path": "/submissions/stats"},
+                {"method": "GET", "path": "/submissions/timeline"},
+                {"method": "GET", "path": "/submissions/summary"},
+                {"method": "DELETE", "path": "/submissions/{submission_id}"},
+            ],
         },
     )
 
@@ -561,6 +590,88 @@ def handle_submission_timeline(event):
     return build_response(200, payload)
 
 
+def build_submission_summary(days):
+    now_utc = datetime.now(timezone.utc)
+    window_start = now_utc - timedelta(days=days)
+
+    key_condition = DynamoKey("entity_type").eq(SUBMISSIONS_ENTITY_TYPE) & DynamoKey("created_at").between(
+        window_start.isoformat(), now_utc.isoformat()
+    )
+
+    unique_emails = set()
+    domain_counts = {}
+    submission_count = 0
+    exclusive_start_key = None
+
+    while True:
+        query_kwargs = {
+            "IndexName": SUBMISSIONS_GSI_NAME,
+            "KeyConditionExpression": key_condition,
+            "ProjectionExpression": "email",
+        }
+        if exclusive_start_key:
+            query_kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+        response = get_submissions_table().query(**query_kwargs)
+        items = response.get("Items", [])
+        submission_count += len(items)
+
+        for item in items:
+            email = (item.get("email") or "").strip().lower()
+            if not email or "@" not in email:
+                continue
+
+            unique_emails.add(email)
+            domain = email.split("@", 1)[1]
+            if not domain:
+                continue
+
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+
+        exclusive_start_key = response.get("LastEvaluatedKey")
+        if not exclusive_start_key:
+            break
+
+    top_domains = [
+        {"domain": domain, "count": count}
+        for domain, count in sorted(domain_counts.items(), key=lambda pair: (-pair[1], pair[0]))[
+            :DEFAULT_SUMMARY_TOP_DOMAINS
+        ]
+    ]
+
+    return {
+        "generated_at": now_utc.isoformat(),
+        "window_start": window_start.isoformat(),
+        "window_end": now_utc.isoformat(),
+        "days": days,
+        "totals": {
+            "submissions": submission_count,
+            "unique_emails": len(unique_emails),
+            "unique_domains": len(domain_counts),
+        },
+        "top_domains": top_domains,
+    }
+
+
+def handle_submission_summary(event):
+    expected_token = os.environ.get("ADMIN_TOKEN", "")
+    request_token = get_admin_token_from_request(event)
+    if not expected_token or request_token != expected_token:
+        return build_response(401, {"error": "Unauthorized."})
+
+    try:
+        days = parse_timeline_days(event)
+    except ValueError as error:
+        return build_response(400, {"error": str(error)})
+
+    try:
+        payload = build_submission_summary(days)
+    except Exception:
+        return build_response(500, {"error": "Unable to load submission summary right now."})
+
+    return build_response(200, payload)
+
+
 def handle_contact(event):
     request_context = event.get("requestContext") or {}
     http_context = request_context.get("http") or {}
@@ -616,6 +727,9 @@ def lambda_handler(event, _context):
 
     if method == "GET" and path == "/submissions/timeline":
         return handle_submission_timeline(event)
+
+    if method == "GET" and path == "/submissions/summary":
+        return handle_submission_summary(event)
 
     if method == "DELETE" and path.startswith("/submissions/"):
         submission_id = path.split("/submissions/", 1)[1].strip("/")
